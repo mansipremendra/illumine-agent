@@ -2,13 +2,21 @@
  * VERCEL SERVERLESS FUNCTION - ILLUMINE AGENT
  * Endpoint: /api/agent
  * Triggered by cron job daily at 08:00 UTC
- * Generates content, posts to Buffer, logs to Google Sheets
+ * 
+ * Flow:
+ * 1. Auto-creates CONTENT_LOG and ACTIVITY_LOG tabs in Google Sheet
+ * 2. Generates diverse D2C content using Claude
+ * 3. Posts to Buffer with UTM tracking
+ * 4. LinkedIn post goes live at 17:00 UTC
+ * 5. Instagram post goes live at 19:00 UTC (+ bio link logged)
+ * 6. All activity logged to Google Sheet for analytics
+ * 
  * NO APPROVAL REQUIRED - Posts go live automatically
  */
 
 import Anthropic from "@anthropic-ai/sdk";
 import { google } from "googleapis";
-import fetch from "node-fetch";
+import BufferPostingService from "./buffer-service.js";
 
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
@@ -21,6 +29,7 @@ const auth = new google.auth.GoogleAuth({
 });
 
 const sheetsClient = google.sheets({ version: "v4", auth });
+const bufferService = new BufferPostingService(process.env.BUFFER_ACCESS_TOKEN);
 
 /**
  * Auto-create Google Sheet tabs if they don't exist
@@ -52,7 +61,7 @@ async function ensureSheetTabs() {
                     title: tabName,
                     gridProperties: {
                       rowCount: 1000,
-                      columnCount: 10,
+                      columnCount: 15,
                     },
                   },
                 },
@@ -61,18 +70,32 @@ async function ensureSheetTabs() {
           },
         });
 
-        // Add headers
+        // Add headers based on tab type
         const headers =
           tabName === "CONTENT_LOG"
             ? [
                 "Date",
+                "Time",
                 "Platform",
+                "Content_Theme",
                 "Text",
-                "Posted_At",
-                "Status",
                 "Buffer_ID",
+                "Scheduled_At",
+                "Status",
+                "LinkedIn_UTM_URL",
+                "Instagram_Bio_Link",
+                "Notes",
               ]
-            : ["Timestamp", "Event", "Details", "Status"];
+            : [
+                "Timestamp",
+                "Event",
+                "Content_Theme",
+                "Platform",
+                "Details",
+                "UTM_Campaign",
+                "Buffer_ID",
+                "Status",
+              ];
 
         await sheetsClient.spreadsheets.values.update({
           spreadsheetId: process.env.GOOGLE_SHEET_ID,
@@ -93,46 +116,6 @@ async function ensureSheetTabs() {
 }
 
 /**
- * Post to Buffer API
- */
-async function postToBuffer(platform, text) {
-  console.log(`[BUFFER] Posting to ${platform}...`);
-
-  try {
-    const profileId =
-      platform === "linkedin"
-        ? process.env.BUFFER_LINKEDIN_PROFILE_ID
-        : process.env.BUFFER_INSTAGRAM_PROFILE_ID;
-
-    const response = await fetch(
-      "https://api.bufferapp.com/1/updates/create.json",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          text: text,
-          profile_ids: [profileId],
-          access_token: process.env.BUFFER_ACCESS_TOKEN,
-        }),
-      }
-    );
-
-    if (!response.ok) {
-      throw new Error(`Buffer API error: ${response.statusText}`);
-    }
-
-    const data = await response.json();
-    console.log(`[BUFFER] Posted to ${platform}: ${data.id}`);
-    return data.id;
-  } catch (error) {
-    console.error(`[BUFFER] Error posting to ${platform}:`, error);
-    throw error;
-  }
-}
-
-/**
  * Main agent logic
  */
 async function runAgent() {
@@ -142,36 +125,47 @@ async function runAgent() {
     // Step 0: Ensure sheet tabs exist
     await ensureSheetTabs();
 
-    // Step 1: Generate content using Claude
-    console.log("[AGENT] Generating content with Claude...");
-    
-    // Randomize content theme each day
+    // Step 1: Select content theme for today
     const contentThemes = [
       {
         name: "Psychology",
-        description: "Consumer psychology, behavioral economics, neuromarketing insights for D2C paid ads"
+        campaign: "consumer-psychology",
+        description:
+          "Consumer psychology, behavioral economics, neuromarketing insights for D2C paid ads",
       },
       {
         name: "Paid Ads Strategy",
-        description: "Meta Ads, Google Ads, LinkedIn Ads optimization tips, attribution, bidding strategies"
+        campaign: "meta-google-ads",
+        description:
+          "Meta Ads, Google Ads, LinkedIn Ads optimization tips, attribution, bidding strategies",
       },
       {
         name: "D2C Scaling",
-        description: "D2C growth frameworks, unit economics, customer retention, scaling strategies"
+        campaign: "d2c-scaling",
+        description:
+          "D2C growth frameworks, unit economics, customer retention, scaling strategies",
       },
       {
         name: "Creative Strategy",
-        description: "Ad creative best practices, copywriting for conversion, creative testing frameworks"
+        campaign: "creative-strategy",
+        description:
+          "Ad creative best practices, copywriting for conversion, creative testing frameworks",
       },
       {
         name: "Case Study",
-        description: "Anonymized D2C brand case studies - what worked, results, lessons learned"
-      }
+        campaign: "case-study",
+        description:
+          "Anonymized D2C brand case studies - what worked, results, lessons learned",
+      },
     ];
-    
-    const todayTheme = contentThemes[Math.floor(Math.random() * contentThemes.length)];
+
+    const todayTheme =
+      contentThemes[Math.floor(Math.random() * contentThemes.length)];
     console.log("[AGENT] Today's content theme:", todayTheme.name);
-    
+
+    // Step 2: Generate content using Claude
+    console.log("[AGENT] Generating content with Claude...");
+
     const contentPrompt = `Generate 2 distinct social media posts for D2C founders about: ${todayTheme.description}
 
 Post 1 (LinkedIn - professional, ~280 chars):
@@ -221,56 +215,102 @@ Format response as JSON with keys: linkedin_text, instagram_text`;
     console.log("  LinkedIn:", content.linkedin_text);
     console.log("  Instagram:", content.instagram_text);
 
-    // Step 2: Post to Buffer (NO APPROVAL REQUIRED - AUTOMATIC)
-    console.log("[AGENT] Posting to Buffer (automatic, no approval needed)...");
-    const linkedinPostId = await postToBuffer("linkedin", content.linkedin_text);
-    const instagramPostId = await postToBuffer(
-      "instagram",
-      content.instagram_text
+    // Step 3: Post to Buffer with UTM tracking
+    console.log("[AGENT] Posting to Buffer with UTM tracking...");
+
+    const bufferContent = {
+      text: content.linkedin_text, // Will be used for LinkedIn
+      utmOptions: {
+        destination: "vault", // You can change this to 'home', 'apply', 'veritashire'
+        campaign: todayTheme.campaign,
+        contentType: "text",
+      },
+    };
+
+    const now = new Date();
+    const linkedinTime = "17:00"; // 17:00 UTC
+    const instagramTime = "19:00"; // 19:00 UTC
+
+    // Post LinkedIn with full post text
+    const linkedinContent = {
+      text: content.linkedin_text,
+      utmOptions: bufferContent.utmOptions,
+    };
+
+    // Post Instagram with Instagram-specific text
+    const instagramContent = {
+      text: content.instagram_text,
+      utmOptions: bufferContent.utmOptions,
+    };
+
+    const linkedinResult = await bufferService.postToLinkedIn(
+      linkedinContent,
+      bufferService.getScheduledTime(linkedinTime)
     );
 
-    const now = new Date().toISOString();
+    const instagramResult = await bufferService.postToInstagram(
+      instagramContent,
+      bufferService.getScheduledTime(instagramTime)
+    );
 
-    // Step 3: Log to CONTENT_LOG
+    const timestamp = now.toISOString();
+    const dateStr = now.toISOString().split("T")[0];
+    const timeStr = now.toISOString().split("T")[1].substring(0, 5);
+
+    // Step 4: Log to CONTENT_LOG
     console.log("[AGENT] Logging content to CONTENT_LOG...");
     await sheetsClient.spreadsheets.values.append({
       spreadsheetId: process.env.GOOGLE_SHEET_ID,
-      range: "CONTENT_LOG!A:F",
+      range: "CONTENT_LOG!A:K",
       valueInputOption: "USER_ENTERED",
       requestBody: {
         values: [
           [
-            new Date().toISOString().split("T")[0],
+            dateStr,
+            timeStr,
             "LinkedIn",
+            todayTheme.name,
             content.linkedin_text,
-            now,
+            linkedinResult?.id || "ERROR",
+            linkedinResult?.scheduledAt || "FAILED",
             "POSTED",
-            linkedinPostId,
+            linkedinResult?.taggedURL || "N/A",
+            "N/A",
+            `Campaign: ${todayTheme.campaign}`,
           ],
           [
-            new Date().toISOString().split("T")[0],
+            dateStr,
+            timeStr,
             "Instagram",
+            todayTheme.name,
             content.instagram_text,
-            now,
+            instagramResult?.id || "ERROR",
+            instagramResult?.scheduledAt || "FAILED",
             "POSTED",
-            instagramPostId,
+            "N/A",
+            instagramResult?.bioLink || "N/A",
+            `Campaign: ${todayTheme.campaign} | Update bio with link`,
           ],
         ],
       },
     });
 
-    // Step 4: Log activity
+    // Step 5: Log activity
     console.log("[AGENT] Logging activity...");
     await sheetsClient.spreadsheets.values.append({
       spreadsheetId: process.env.GOOGLE_SHEET_ID,
-      range: "ACTIVITY_LOG!A:D",
+      range: "ACTIVITY_LOG!A:H",
       valueInputOption: "USER_ENTERED",
       requestBody: {
         values: [
           [
-            now,
+            timestamp,
             "CONTENT_GENERATED_AND_POSTED",
-            "LinkedIn + Instagram posted automatically",
+            todayTheme.name,
+            "LinkedIn + Instagram",
+            "Posts scheduled with UTM tracking",
+            todayTheme.campaign,
+            `LI: ${linkedinResult?.id} | IG: ${instagramResult?.id}`,
             "SUCCESS",
           ],
         ],
@@ -278,12 +318,22 @@ Format response as JSON with keys: linkedin_text, instagram_text`;
     });
 
     console.log("[AGENT] Agent execution completed successfully");
+    console.log("\n[UTM SUMMARY FOR ANALYTICS]");
+    console.log(`LinkedIn  → ${linkedinResult?.taggedURL}`);
+    console.log(
+      `Instagram → ${instagramResult?.bioLink} (update bio before post goes live)`
+    );
 
     return {
       status: 200,
       message: "Content generated and posted successfully",
+      theme: todayTheme.name,
       content: content,
-      bufferIds: { linkedin: linkedinPostId, instagram: instagramPostId },
+      bufferIds: { linkedin: linkedinResult?.id, instagram: instagramResult?.id },
+      utmUrls: {
+        linkedin: linkedinResult?.taggedURL,
+        instagram: instagramResult?.bioLink,
+      },
     };
   } catch (error) {
     console.error("[AGENT ERROR]", error);
@@ -292,14 +342,18 @@ Format response as JSON with keys: linkedin_text, instagram_text`;
     try {
       await sheetsClient.spreadsheets.values.append({
         spreadsheetId: process.env.GOOGLE_SHEET_ID,
-        range: "ACTIVITY_LOG!A:D",
+        range: "ACTIVITY_LOG!A:H",
         valueInputOption: "USER_ENTERED",
         requestBody: {
           values: [
             [
               new Date().toISOString(),
               "ERROR",
+              "UNKNOWN",
+              "N/A",
               error.message,
+              "N/A",
+              "N/A",
               "FAILED",
             ],
           ],
