@@ -1,0 +1,37 @@
+{
+  "name": "illumine-agent",
+  "version": "1.0.0",
+  "description": "Autonomous social media agent for Illumine Ads - LinkedIn + Instagram posting and engagement",
+  "type": "module",
+  "main": "api/agent.js",
+  "scripts": {
+    "dev": "node --watch api/agent.js",
+    "test": "node test/run-agent.js",
+    "deploy": "vercel --prod"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.24.0",
+    "@googleapis/sheets": "^9.0.0",
+    "buffer": "^6.0.3",
+    "dotenv": "^16.3.1",
+    "node-fetch": "^3.3.2"
+  },
+  "devDependencies": {
+    "vercel": "^33.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "illumine-ads",
+    "social-media",
+    "automation",
+    "agent",
+    "linkedin",
+    "instagram",
+    "psychology",
+    "neuromarketing"
+  ],
+  "author": "Illumine Ads",
+  "license": "PROPRIETARY"
+}
