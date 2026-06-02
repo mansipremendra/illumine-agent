@@ -1,3 +1,5 @@
+// Updated environment variables - ready for production deployment
+
 import Anthropic from "@anthropic-ai/sdk";
 import { LinkedInClient } from "./clients/linkedin.js";
 import { InstagramClient } from "./clients/instagram.js";
