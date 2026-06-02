@@ -144,17 +144,47 @@ async function runAgent() {
 
     // Step 1: Generate content using Claude
     console.log("[AGENT] Generating content with Claude...");
-    const contentPrompt = `Generate 2 distinct social media posts for D2C founders about paid marketing psychology.
+    
+    // Randomize content theme each day
+    const contentThemes = [
+      {
+        name: "Psychology",
+        description: "Consumer psychology, behavioral economics, neuromarketing insights for D2C paid ads"
+      },
+      {
+        name: "Paid Ads Strategy",
+        description: "Meta Ads, Google Ads, LinkedIn Ads optimization tips, attribution, bidding strategies"
+      },
+      {
+        name: "D2C Scaling",
+        description: "D2C growth frameworks, unit economics, customer retention, scaling strategies"
+      },
+      {
+        name: "Creative Strategy",
+        description: "Ad creative best practices, copywriting for conversion, creative testing frameworks"
+      },
+      {
+        name: "Case Study",
+        description: "Anonymized D2C brand case studies - what worked, results, lessons learned"
+      }
+    ];
+    
+    const todayTheme = contentThemes[Math.floor(Math.random() * contentThemes.length)];
+    console.log("[AGENT] Today's content theme:", todayTheme.name);
+    
+    const contentPrompt = `Generate 2 distinct social media posts for D2C founders about: ${todayTheme.description}
 
 Post 1 (LinkedIn - professional, ~280 chars):
-- Focus on psychology/behavioral economics insight
-- Include research reference
+- Deep insight or framework related to ${todayTheme.name}
+- Include research reference or real example
 - Professional tone
+- Actionable for D2C founders
 
 Post 2 (Instagram - engaging, ~150 chars):
-- Same psychology insight but more conversational
-- Include relevant hashtags
-- Engaging/conversational tone
+- Same core insight but more conversational
+- Include relevant hashtags (2-3 max)
+- Engaging/punchy tone
+- Include call-to-action
 
 Format response as JSON with keys: linkedin_text, instagram_text`;
 
