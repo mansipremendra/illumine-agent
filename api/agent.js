@@ -2,12 +2,13 @@
  * VERCEL SERVERLESS FUNCTION - ILLUMINE AGENT
  * Endpoint: /api/agent
  * Triggered by cron job daily at 08:00 UTC
- * Generates content, logs to Google Sheets, posts to Buffer
+ * Generates content, posts to Buffer, logs to Google Sheets
+ * NO APPROVAL REQUIRED - Posts go live automatically
  */
 
 import Anthropic from "@anthropic-ai/sdk";
-import { sheets_v4 } from "@googleapis/sheets";
 import { google } from "googleapis";
+import fetch from "node-fetch";
 
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
@@ -22,12 +23,125 @@ const auth = new google.auth.GoogleAuth({
 const sheetsClient = google.sheets({ version: "v4", auth });
 
 /**
- * Main agent logic - generates content and logs to sheet
+ * Auto-create Google Sheet tabs if they don't exist
+ */
+async function ensureSheetTabs() {
+  console.log("[SHEETS] Checking for required tabs...");
+
+  try {
+    const spreadsheet = await sheetsClient.spreadsheets.get({
+      spreadsheetId: process.env.GOOGLE_SHEET_ID,
+    });
+
+    const existingTabs = spreadsheet.data.sheets.map((s) => s.properties.title);
+    console.log("[SHEETS] Existing tabs:", existingTabs);
+
+    const requiredTabs = ["CONTENT_LOG", "ACTIVITY_LOG"];
+
+    for (const tabName of requiredTabs) {
+      if (!existingTabs.includes(tabName)) {
+        console.log(`[SHEETS] Creating tab: ${tabName}`);
+
+        await sheetsClient.spreadsheets.batchUpdate({
+          spreadsheetId: process.env.GOOGLE_SHEET_ID,
+          requestBody: {
+            requests: [
+              {
+                addSheet: {
+                  properties: {
+                    title: tabName,
+                    gridProperties: {
+                      rowCount: 1000,
+                      columnCount: 10,
+                    },
+                  },
+                },
+              },
+            ],
+          },
+        });
+
+        // Add headers
+        const headers =
+          tabName === "CONTENT_LOG"
+            ? [
+                "Date",
+                "Platform",
+                "Text",
+                "Posted_At",
+                "Status",
+                "Buffer_ID",
+              ]
+            : ["Timestamp", "Event", "Details", "Status"];
+
+        await sheetsClient.spreadsheets.values.update({
+          spreadsheetId: process.env.GOOGLE_SHEET_ID,
+          range: `${tabName}!A1`,
+          valueInputOption: "USER_ENTERED",
+          requestBody: {
+            values: [headers],
+          },
+        });
+
+        console.log(`[SHEETS] Tab created with headers: ${tabName}`);
+      }
+    }
+  } catch (error) {
+    console.error("[SHEETS] Error ensuring tabs:", error);
+    throw error;
+  }
+}
+
+/**
+ * Post to Buffer API
+ */
+async function postToBuffer(platform, text) {
+  console.log(`[BUFFER] Posting to ${platform}...`);
+
+  try {
+    const profileId =
+      platform === "linkedin"
+        ? process.env.BUFFER_LINKEDIN_PROFILE_ID
+        : process.env.BUFFER_INSTAGRAM_PROFILE_ID;
+
+    const response = await fetch(
+      "https://api.bufferapp.com/1/updates/create.json",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          text: text,
+          profile_ids: [profileId],
+          access_token: process.env.BUFFER_ACCESS_TOKEN,
+        }),
+      }
+    );
+
+    if (!response.ok) {
+      throw new Error(`Buffer API error: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    console.log(`[BUFFER] Posted to ${platform}: ${data.id}`);
+    return data.id;
+  } catch (error) {
+    console.error(`[BUFFER] Error posting to ${platform}:`, error);
+    throw error;
+  }
+}
+
+/**
+ * Main agent logic
  */
 async function runAgent() {
   console.log("[AGENT] Starting Illumine social media agent...");
 
   try {
+    // Step 0: Ensure sheet tabs exist
+    await ensureSheetTabs();
+
     // Step 1: Generate content using Claude
     console.log("[AGENT] Generating content with Claude...");
     const contentPrompt = `Generate 2 distinct social media posts for D2C founders about paid marketing psychology.
@@ -77,54 +191,69 @@ Format response as JSON with keys: linkedin_text, instagram_text`;
     console.log("  LinkedIn:", content.linkedin_text);
     console.log("  Instagram:", content.instagram_text);
 
-    // Step 2: Log to Google Sheets
-    console.log("[AGENT] Logging to Google Sheets...");
-    const sheetResponse = await sheetsClient.spreadsheets.values.append({
+    // Step 2: Post to Buffer (NO APPROVAL REQUIRED - AUTOMATIC)
+    console.log("[AGENT] Posting to Buffer (automatic, no approval needed)...");
+    const linkedinPostId = await postToBuffer("linkedin", content.linkedin_text);
+    const instagramPostId = await postToBuffer(
+      "instagram",
+      content.instagram_text
+    );
+
+    const now = new Date().toISOString();
+
+    // Step 3: Log to CONTENT_LOG
+    console.log("[AGENT] Logging content to CONTENT_LOG...");
+    await sheetsClient.spreadsheets.values.append({
       spreadsheetId: process.env.GOOGLE_SHEET_ID,
-      range: "CONTENT_PENDING_REVIEW!A:H",
+      range: "CONTENT_LOG!A:F",
       valueInputOption: "USER_ENTERED",
       requestBody: {
         values: [
           [
             new Date().toISOString().split("T")[0],
-            "PENDING",
-            "both",
-            content.linkedin_text + " | " + content.instagram_text,
+            "LinkedIn",
             content.linkedin_text,
+            now,
+            "POSTED",
+            linkedinPostId,
+          ],
+          [
+            new Date().toISOString().split("T")[0],
+            "Instagram",
             content.instagram_text,
-            "Auto-generated by Illumine Agent",
-            "",
+            now,
+            "POSTED",
+            instagramPostId,
           ],
         ],
       },
     });
 
-    console.log("[AGENT] Logged to Google Sheet:", sheetResponse.data);
-
-    // Step 3: Log activity
+    // Step 4: Log activity
+    console.log("[AGENT] Logging activity...");
     await sheetsClient.spreadsheets.values.append({
       spreadsheetId: process.env.GOOGLE_SHEET_ID,
-      range: "ACTIVITY_LOG!A:E",
+      range: "ACTIVITY_LOG!A:D",
       valueInputOption: "USER_ENTERED",
       requestBody: {
         values: [
           [
-            new Date().toISOString(),
-            "CONTENT_GENERATED",
-            "PENDING_REVIEW",
-            `Generated LinkedIn + Instagram content`,
-            "success",
+            now,
+            "CONTENT_GENERATED_AND_POSTED",
+            "LinkedIn + Instagram posted automatically",
+            "SUCCESS",
           ],
         ],
       },
     });
 
-    console.log("[AGENT] Activity logged");
+    console.log("[AGENT] Agent execution completed successfully");
 
     return {
       status: 200,
-      message: "Agent executed successfully",
+      message: "Content generated and posted successfully",
       content: content,
+      bufferIds: { linkedin: linkedinPostId, instagram: instagramPostId },
     };
   } catch (error) {
     console.error("[AGENT ERROR]", error);
@@ -133,16 +262,15 @@ Format response as JSON with keys: linkedin_text, instagram_text`;
     try {
       await sheetsClient.spreadsheets.values.append({
         spreadsheetId: process.env.GOOGLE_SHEET_ID,
-        range: "ACTIVITY_LOG!A:E",
+        range: "ACTIVITY_LOG!A:D",
         valueInputOption: "USER_ENTERED",
         requestBody: {
           values: [
             [
               new Date().toISOString(),
               "ERROR",
-              "AGENT_EXECUTION",
               error.message,
-              "failed",
+              "FAILED",
             ],
           ],
         },
