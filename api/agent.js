@@ -154,7 +154,7 @@ Post 2 (Instagram - engaging, ~150 chars):
 Respond ONLY with raw JSON, no markdown fences, with keys: linkedin_text, instagram_text`;
 
   const response = await anthropic.messages.create({
-    model: "claude-sonnet-4-20250514",
+    model: "claude-sonnet-4-5",
     max_tokens: 1024,
     messages: [{ role: "user", content: contentPrompt }],
   });
