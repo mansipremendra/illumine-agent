@@ -25,7 +25,7 @@ const anthropic = new Anthropic({
 
 // Initialize Google Sheets
 const auth = new google.auth.GoogleAuth({
-  credentials: JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON),
+  credentials: JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON.replace(/\\n/g, '\n')),
   scopes: ["https://www.googleapis.com/auth/spreadsheets"],
 });
 
