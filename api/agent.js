@@ -23,9 +23,14 @@ const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
 
-// Initialize Google Sheets
+// Initialize Google Sheets using separate env vars (no JSON blob = no paste corruption)
 const auth = new google.auth.GoogleAuth({
-  credentials: JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON.replace(/\\n/g, '\n')),
+  credentials: {
+    type: "service_account",
+    project_id: process.env.GOOGLE_PROJECT_ID,
+    client_email: process.env.GOOGLE_CLIENT_EMAIL,
+    private_key: (process.env.GOOGLE_PRIVATE_KEY || "").split(String.fromCharCode(92,110)).join(String.fromCharCode(10)),
+  },
   scopes: ["https://www.googleapis.com/auth/spreadsheets"],
 });
 
