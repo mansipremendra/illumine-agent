@@ -1,7 +1,25 @@
-"dependencies": {
+{
+  "name": "illumine-agent",
+  "version": "3.0.0",
+  "description": "Illumine Ads social media agent",
+  "type": "module",
+  "main": "api/agent.js",
+  "scripts": {
+    "deploy": "vercel --prod"
+  },
+  "dependencies": {
     "@anthropic-ai/sdk": "^0.30.1",
     "@vercel/blob": "latest",
     "@vercel/og": "^0.6.2",
     "googleapis": "^144.0.0",
     "dotenv": "^16.3.1"
   },
+  "devDependencies": {
+    "vercel": "^33.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "author": "Illumine Ads",
+  "license": "PROPRIETARY"
+}
