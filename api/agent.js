@@ -1,17 +1,15 @@
 /**
  * ILLUMINE ADS AGENT v3
  * Uses @vercel/og (Satori) for image rendering - no Chromium, works on Hobby plan
- * 
- * Pipeline: Generate content → Render PNG → Upload to Drive → Log to Sheet
+ *
+ * Pipeline: Generate content → Render PNG → Upload to Vercel Blob → Log to Sheet
  * Make.com then reads the sheet and posts via Buffer
  */
 
 import Anthropic from "@anthropic-ai/sdk";
 import { google } from "googleapis";
 import { ImageResponse } from "@vercel/og";
-import * as fs from "fs";
-import * as path from "path";
-import * as os from "os";
+import { put } from "@vercel/blob";
 
 // ─── AUTH ─────────────────────────────────────────────────────────────────────
 
@@ -215,44 +213,22 @@ async function renderImage(lines, isQuip = false) {
     { width: 1080, height: 1350 }
   );
 
-  // Convert to buffer
+  // Convert to buffer — no temp file needed, Blob takes the buffer directly
   const arrayBuffer = await imageResponse.arrayBuffer();
-  const buffer = Buffer.from(arrayBuffer);
-
-  const tmpPath = path.join(os.tmpdir(), `illumine_${Date.now()}.png`);
-  fs.writeFileSync(tmpPath, buffer);
-  return tmpPath;
+  return Buffer.from(arrayBuffer);
 }
 
-// ─── GOOGLE DRIVE UPLOAD ──────────────────────────────────────────────────────
+// ─── VERCEL BLOB UPLOAD ───────────────────────────────────────────────────────
 
-async function uploadToDrive(filePath, fileName) {
-  const auth = getAuth(["https://www.googleapis.com/auth/drive"]);
-  const drive = google.drive({ version: "v3", auth });
-
-  let folderId = process.env.GOOGLE_DRIVE_FOLDER_ID;
-  if (!folderId) {
-    const folder = await drive.files.create({
-      requestBody: { name: "Illumine Posts", mimeType: "application/vnd.google-apps.folder" },
-      fields: "id",
-    });
-    folderId = folder.data.id;
-    console.log(`[DRIVE] Created folder ID: ${folderId} — add this as GOOGLE_DRIVE_FOLDER_ID in Vercel`);
-  }
-
-  const file = await drive.files.create({
-    requestBody: { name: fileName, parents: [folderId] },
-    media: { mimeType: "image/png", body: fs.createReadStream(filePath) },
-    fields: "id",
+async function uploadToBlob(buffer, fileName) {
+  // Auth is automatic on Vercel via OIDC (BLOB_STORE_ID is set in env).
+  // The store is public, so blob.url is a publicly accessible image URL.
+  const blob = await put(fileName, buffer, {
+    access: "public",
+    contentType: "image/png",
+    addRandomSuffix: true,
   });
-
-  await drive.permissions.create({
-    fileId: file.data.id,
-    requestBody: { role: "reader", type: "anyone" },
-  });
-
-  fs.unlinkSync(filePath);
-  return `https://drive.google.com/uc?export=view&id=${file.data.id}`;
+  return blob.url;
 }
 
 // ─── SHEETS HELPER ────────────────────────────────────────────────────────────
@@ -313,15 +289,15 @@ async function runAgent() {
   const content = JSON.parse(match[0]);
   console.log(`[AGENT] Hook: ${content.hook}`);
 
-  // Render image
+  // Render image (returns a Buffer)
   console.log("[AGENT] Rendering image...");
-  const imgPath = await renderImage(content.lines, isQuip);
+  const imgBuffer = await renderImage(content.lines, isQuip);
 
-  // Upload to Drive
-  console.log("[AGENT] Uploading to Drive...");
+  // Upload to Vercel Blob
+  console.log("[AGENT] Uploading to Blob...");
   const dateStr = now.toISOString().split("T")[0];
   const fileName = `illumine_${dateStr}_${config.theme.replace(/\s+/g, "_")}.png`;
-  const imageUrl = await uploadToDrive(imgPath, fileName);
+  const imageUrl = await uploadToBlob(imgBuffer, fileName);
   console.log(`[AGENT] Image URL: ${imageUrl}`);
 
   // Log to sheet
