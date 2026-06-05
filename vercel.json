@@ -1,8 +1,21 @@
 {
+  "version": 2,
+  "functions": {
+    "api/agent.js": {
+      "maxDuration": 60
+    },
+    "api/commenter.js": {
+      "maxDuration": 60
+    }
+  },
   "crons": [
     {
       "path": "/api/agent",
       "schedule": "0 8 * * *"
+    },
+    {
+      "path": "/api/commenter",
+      "schedule": "*/10 11-18 * * 1-5"
     }
   ]
 }
