@@ -1,0 +1,21 @@
+name: LinkedIn Commenter
+
+# Pings the Vercel /api/commenter endpoint every 10 minutes
+# during 11:00–18:59 UTC, Mon–Fri.
+# The endpoint itself gates strictly to 11:30–18:30 UTC (5 PM–midnight IST),
+# so any ticks outside that window simply return "skipped".
+
+on:
+  schedule:
+    - cron: "*/10 11-18 * * 1-5"
+  workflow_dispatch: {}   # allows manual trigger from the Actions tab for testing
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger commenter
+        run: |
+          curl -sS -X GET \
+            -H "Authorization: Bearer ${{ secrets.COMMENTER_SECRET }}" \
+            "${{ secrets.COMMENTER_URL }}"
