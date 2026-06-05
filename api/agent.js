@@ -106,18 +106,27 @@ Return ONLY raw JSON:
   },
   5: {
     theme: "AI in Marketing",
-    prompt: `You are writing for M.P.S. Singh, founder of Illumine Ads.
+    prompt: `You are writing for M.P.S. Singh, founder of Illumine Ads — a psychology-informed Meta ads consultancy for D2C founders.
 
-Write a post about a specific AI development and its real impact on paid marketing.
-- Open with what specifically launched or changed, and when
-- Explain what it actually does vs the press release version
-- Tell a D2C founder what this means for their workflow
-- Be honest about limitations
-- End with: worth attention now or in 6 months?
-- Voice: sharp, authoritative, second person
+Write a PRACTICAL how-to post showing a D2C founder one concrete way to use AI (Claude, ChatGPT, or similar) in their day-to-day marketing work. This is a tactical tip they can act on today — NOT industry news, NOT a product announcement, NOT a "what just launched" story. Do not reference dated events or version releases.
+
+Pick ONE specific, useful workflow, for example:
+- Generating a weekly Meta Ads performance report from exported CSV data
+- Connecting Claude to their Meta Ads data to spot underperforming ad sets
+- Drafting 10 ad copy variations from one winning angle
+- Turning customer reviews into hook ideas for new creative
+- Building a simple prompt that audits a landing page for friction
+- Summarising a week of comments/DMs into themes for content
+
+Structure:
+- Open with the specific task and why doing it manually wastes their time
+- Walk through exactly how to do it with AI — be concrete about the tool, the inputs (e.g. "export your Ads Manager CSV"), and a sample prompt or step
+- Note one thing to watch out for (where AI gets it wrong)
+- End with the payoff: what they get back (time, clarity, more tests)
+- Voice: sharp, authoritative, second person, specific. No fluff, no hype.
 
 Return ONLY raw JSON:
-{"lines": ["line1", "", "line2 after break"], "caption": "full caption with hashtags", "hook": "first line only"}`
+{"lines": ["line1", "line2"], "caption": "full caption with hashtags", "hook": "first line only"}`
   },
   6: {
     theme: "Sunday Quip",
