@@ -311,17 +311,44 @@ async function runAgent() {
 
   console.log(`[AGENT] Day ${day}: ${config.theme}`);
 
-  // Generate content
+  // Generate content using a forced tool call so the output is ALWAYS valid
+  // structured data — no hand-written JSON to break on quotes or line breaks.
+  const POST_TOOL = {
+    name: "create_post",
+    description: "Return the finished social media post content.",
+    input_schema: {
+      type: "object",
+      properties: {
+        lines: {
+          type: "array",
+          items: { type: "string" },
+          description: "EXACTLY 2 short lines for the image. Each line max 7 words. Together they form one punchy hook.",
+        },
+        caption: {
+          type: "string",
+          description: "The full post caption, including hashtags.",
+        },
+        hook: {
+          type: "string",
+          description: "The single strongest line, repeated from lines.",
+        },
+      },
+      required: ["lines", "caption", "hook"],
+    },
+  };
+
   const response = await anthropic.messages.create({
     model: "claude-sonnet-4-5",
     max_tokens: 2000,
+    tools: [POST_TOOL],
+    tool_choice: { type: "tool", name: "create_post" },
     messages: [{ role: "user", content: config.prompt + IMAGE_TEXT_RULE }],
   });
 
-  const text = response.content[0].text;
-  const match = text.match(/\{[\s\S]*\}/);
-  if (!match) throw new Error(`No JSON in response: ${text.substring(0, 200)}`);
-  const content = JSON.parse(match[0]);
+  // The tool input is already a parsed, valid object — no JSON.parse needed.
+  const toolUse = response.content.find((b) => b.type === "tool_use");
+  if (!toolUse) throw new Error("No structured output returned from the model.");
+  const content = toolUse.input;
   console.log(`[AGENT] Hook: ${content.hook}`);
 
   // Render image (returns a Buffer)
