@@ -130,10 +130,36 @@ Return ONLY raw JSON:
   }
 };
 
+// ─── IMAGE TEXT RULE (appended to every prompt) ───────────────────────────────
+
+const IMAGE_TEXT_RULE = `
+
+────────────────────────
+CRITICAL OUTPUT RULE — READ CAREFULLY:
+
+"lines" is the text PRINTED ON THE IMAGE. It is NOT the post body.
+It must be EXACTLY 2 short lines, readable from a phone thumbnail:
+- Exactly 2 lines (no more, no fewer)
+- Each line maximum 7 words
+- Together they form ONE punchy hook — never the full explanation
+- Do NOT include empty-string entries; just two strings
+
+"caption" holds the FULL post — all the detail, context, and hashtags.
+"hook" is the single strongest line, repeated from "lines".
+
+If "lines" has more than 2 entries, you are doing it wrong.
+Return ONLY raw JSON, no markdown, no backticks.
+────────────────────────`;
+
 // ─── IMAGE RENDERER ───────────────────────────────────────────────────────────
 
 async function renderImage(lines, isQuip = false) {
-  const fontSize = isQuip ? 52 : 42;
+  // The image always shows exactly 2 short lines. Drop any blanks/extras
+  // so an over-long generation can never overflow and overlap again.
+  lines = lines.filter((l) => l && l.trim() !== "").slice(0, 2);
+
+  // With only two lines we have room for a bigger, punchier font.
+  const fontSize = 60;
 
   // Build children array for Satori
   const children = [];
@@ -161,7 +187,7 @@ async function renderImage(lines, isQuip = false) {
           style: {
             fontSize, fontWeight: 900, lineHeight: 1.22,
             color: "#0A0A0A", letterSpacing: -0.8, marginBottom: 4,
-            fontFamily: "Inter"
+            fontFamily: "Inter", flexShrink: 0
           },
           children: line
         }
@@ -172,7 +198,7 @@ async function renderImage(lines, isQuip = false) {
   children.push({
     type: "div",
     props: {
-      style: { flex: 1, display: "flex", flexDirection: "column", justifyContent: "center" },
+      style: { flex: 1, display: "flex", flexDirection: "column", justifyContent: "center", overflow: "hidden" },
       children: contentChildren
     }
   });
@@ -280,7 +306,7 @@ async function runAgent() {
   const response = await anthropic.messages.create({
     model: "claude-sonnet-4-5",
     max_tokens: 2000,
-    messages: [{ role: "user", content: config.prompt }],
+    messages: [{ role: "user", content: config.prompt + IMAGE_TEXT_RULE }],
   });
 
   const text = response.content[0].text;
