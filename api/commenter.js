@@ -346,6 +346,14 @@ async function ensureCommentsLogTab(sheets) {
 
 // ─── Main Handler ─────────────────────────────────────────────────────────────
 export default async function handler(req, res) {
+  // Auth: only allow requests carrying the shared secret
+  const provided =
+    req.headers["authorization"]?.replace("Bearer ", "") ||
+    req.query?.secret;
+  if (provided !== process.env.COMMENTER_SECRET) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
   // Gate: only run 11:30–18:30 UTC (5 PM – midnight IST)
   const now = new Date();
   const utcHour = now.getUTCHours();
