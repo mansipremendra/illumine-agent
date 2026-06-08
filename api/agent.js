@@ -31,24 +31,37 @@ function getAuth(scopes) {
 
 // ─── CONTENT CALENDAR ─────────────────────────────────────────────────────────
 
-const CALENDAR = {
-  0: {
-    theme: "Platform News",
-    prompt: `You are writing for M.P.S. Singh, founder of Illumine Ads — a psychology-informed Meta ads consultancy for D2C founders in beauty, supplements, fashion (UK + Dubai).
+function getCalendar() {
+  const today = new Date();
+  const dateString = today.toLocaleDateString("en-GB", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  });
 
-Write a post about a real, specific Meta Ads or Google Ads development from recent weeks.
-- Open with the exact change and approximate date
-- Explain the mechanical impact on a D2C ad account  
-- Give one concrete action for this week
-- End with a line showing deeper understanding than most coverage
-- Voice: sharp, authoritative, second person, no fluff, specific numbers
+  return {
+    0: {
+      theme: "Platform News",
+      prompt: `You are writing for M.P.S. Singh, founder of Illumine Ads — a psychology-informed Meta ads consultancy for D2C founders in beauty, supplements, fashion (UK + Dubai).
+
+Today's date is ${dateString}.
+
+Use web search to find a REAL Meta Ads or Google Ads platform change announced in the last 14 days. Do not reference anything older than that. If nothing genuinely new exists, write a neuromarketing post instead — never fabricate or use stale news.
+
+Structure the post exactly like this:
+- Line 1: Name the specific change and when it happened — no vague intros, no "here's what changed"
+- Lines 2–3: Explain what mechanically changed inside a D2C ad account — use real ad account language (CPMs, ROAS, attribution windows, Advantage+, etc.)
+- "Three things to do this week:" followed by 3 numbered, specific actions — name the platform, the setting, or the tool
+- Final line: The deeper truth most coverage missed — what this really signals about where Meta or Google is heading
+
+Voice: sharp, authoritative, second person. No fluff. No generic advice. Every sentence earns its place.
 
 Return ONLY raw JSON:
-{"lines": ["line1", "", "line2 after break"], "caption": "full caption with hashtags", "hook": "first line only"}`
-  },
-  1: {
-    theme: "Neuromarketing",
-    prompt: `You are writing for M.P.S. Singh, founder of Illumine Ads.
+{"lines": ["line1", "line2"], "caption": "full post text with hashtags", "hook": "first line only"}`
+    },
+    1: {
+      theme: "Neuromarketing",
+      prompt: `You are writing for M.P.S. Singh, founder of Illumine Ads.
 
 Write a post about a specific named neuromarketing principle (Von Restorff Effect, Scarcity Heuristic, Dual Process Theory, Anchoring, Loss Aversion, etc.)
 - Open with the principle name and a surprising implication  
@@ -58,11 +71,11 @@ Write a post about a specific named neuromarketing principle (Von Restorff Effec
 - Voice: sharp, authoritative, second person, specific
 
 Return ONLY raw JSON:
-{"lines": ["line1", "", "line2 after break"], "caption": "full caption with hashtags", "hook": "first line only"}`
-  },
-  2: {
-    theme: "Consumer Psychology",
-    prompt: `You are writing for M.P.S. Singh, founder of Illumine Ads.
+{"lines": ["line1", "line2"], "caption": "full caption with hashtags", "hook": "first line only"}`
+    },
+    2: {
+      theme: "Consumer Psychology",
+      prompt: `You are writing for M.P.S. Singh, founder of Illumine Ads.
 
 Write a post about a specific consumer psychology framework or buying behaviour pattern.
 Use real frameworks: Jobs To Be Done, Identity-Based Purchasing, Endowment Effect, Paradox of Choice, etc.
@@ -73,25 +86,30 @@ Use real frameworks: Jobs To Be Done, Identity-Based Purchasing, Endowment Effec
 - Voice: sharp, authoritative, second person
 
 Return ONLY raw JSON:
-{"lines": ["line1", "", "line2 after break"], "caption": "full caption with hashtags", "hook": "first line only"}`
-  },
-  3: {
-    theme: "Platform News",
-    prompt: `You are writing for M.P.S. Singh, founder of Illumine Ads.
+{"lines": ["line1", "line2"], "caption": "full caption with hashtags", "hook": "first line only"}`
+    },
+    3: {
+      theme: "Platform News",
+      prompt: `You are writing for M.P.S. Singh, founder of Illumine Ads — a psychology-informed Meta ads consultancy for D2C founders in beauty, supplements, fashion (UK + Dubai).
 
-Write a post about a specific Meta Ads or Google Ads development — focus on creative tools, Advantage+ changes, measurement updates, or Shopping features.
-- Open with the specific change and date
-- Explain what mechanically changed  
-- Tell a D2C founder what this means for their spend
-- End with honest assessment including limitations most coverage ignores
-- Voice: sharp, authoritative, second person
+Today's date is ${dateString}.
+
+Use web search to find a REAL Meta Ads or Google Ads platform change announced in the last 14 days — focus on creative tools, Advantage+ changes, measurement updates, or Shopping features. Do not reference anything older than 14 days. If nothing genuinely new exists, write a consumer psychology post instead — never fabricate or use stale news.
+
+Structure the post exactly like this:
+- Line 1: Name the specific change and when it happened — no vague intros
+- Lines 2–3: Explain what mechanically changed and what it means for D2C ad spend
+- "Three things to do this week:" followed by 3 numbered, specific actions — name the platform, the setting, or the tool
+- Final line: Honest assessment including the limitation or risk most coverage glosses over
+
+Voice: sharp, authoritative, second person. No fluff.
 
 Return ONLY raw JSON:
-{"lines": ["line1", "", "line2 after break"], "caption": "full caption with hashtags", "hook": "first line only"}`
-  },
-  4: {
-    theme: "Funnel Optimisation",
-    prompt: `You are writing for M.P.S. Singh, founder of Illumine Ads.
+{"lines": ["line1", "line2"], "caption": "full post text with hashtags", "hook": "first line only"}`
+    },
+    4: {
+      theme: "Funnel Optimisation",
+      prompt: `You are writing for M.P.S. Singh, founder of Illumine Ads.
 
 Write a post about a specific funnel stage or conversion fix for D2C brands.
 Pick one: awareness hook rate, landing page friction, checkout abandonment, post-purchase retention, or retargeting.
@@ -102,42 +120,41 @@ Pick one: awareness hook rate, landing page friction, checkout abandonment, post
 - Voice: sharp, authoritative, second person
 
 Return ONLY raw JSON:
-{"lines": ["line1", "", "line2 after break"], "caption": "full caption with hashtags", "hook": "first line only"}`
-  },
-  5: {
-    theme: "AI in Marketing",
-    prompt: `You are writing for M.P.S. Singh, founder of Illumine Ads — a psychology-informed Meta ads consultancy for D2C founders.
+{"lines": ["line1", "line2"], "caption": "full caption with hashtags", "hook": "first line only"}`
+    },
+    5: {
+      theme: "AI in Marketing",
+      prompt: `You are writing for M.P.S. Singh, founder of Illumine Ads — a psychology-informed Meta ads consultancy for D2C founders.
 
 Write a PRACTICAL how-to post showing a D2C founder one concrete way to use AI (Claude, ChatGPT, or similar) in their day-to-day marketing work. This is a tactical tip they can act on today — NOT industry news, NOT a product announcement, NOT a "what just launched" story. Do not reference dated events or version releases.
 
 Pick ONE specific, useful workflow, for example:
 - Generating a weekly Meta Ads performance report from exported CSV data
-- Connecting Claude to their Meta Ads data to spot underperforming ad sets
 - Drafting 10 ad copy variations from one winning angle
 - Turning customer reviews into hook ideas for new creative
 - Building a simple prompt that audits a landing page for friction
-- Summarising a week of comments/DMs into themes for content
 
 Structure:
 - Open with the specific task and why doing it manually wastes their time
-- Walk through exactly how to do it with AI — be concrete about the tool, the inputs (e.g. "export your Ads Manager CSV"), and a sample prompt or step
+- Walk through exactly how to do it with AI — be concrete about the tool, the inputs, and a sample prompt or step
 - Note one thing to watch out for (where AI gets it wrong)
 - End with the payoff: what they get back (time, clarity, more tests)
 - Voice: sharp, authoritative, second person, specific. No fluff, no hype.
 
 Return ONLY raw JSON:
 {"lines": ["line1", "line2"], "caption": "full caption with hashtags", "hook": "first line only"}`
-  },
-  6: {
-    theme: "Sunday Quip",
-    prompt: `Write a single genuinely funny 2-3 line observation about marketing, consumer psychology, human behaviour, or AI.
+    },
+    6: {
+      theme: "Sunday Quip",
+      prompt: `Write a single genuinely funny 2-3 line observation about marketing, consumer psychology, human behaviour, or AI.
 Makes a marketer laugh because it's true. No hashtags. No emojis.
 The kind of thing someone screenshots and sends to their team.
 
 Return ONLY raw JSON:
 {"lines": ["line1", "line2"], "caption": "same text, no hashtags", "hook": "first line only"}`
-  }
-};
+    }
+  };
+}
 
 // ─── IMAGE TEXT RULE (appended to every prompt) ───────────────────────────────
 
@@ -163,14 +180,9 @@ Return ONLY raw JSON, no markdown, no backticks.
 // ─── IMAGE RENDERER ───────────────────────────────────────────────────────────
 
 async function renderImage(lines, isQuip = false) {
-  // The image always shows exactly 2 short lines. Drop any blanks/extras
-  // so an over-long generation can never overflow and overlap again.
   lines = lines.filter((l) => l && l.trim() !== "").slice(0, 2);
 
-  // With only two lines we have room for a bigger, punchier font.
   const fontSize = 60;
-
-  // Build children array for Satori
   const children = [];
 
   // Gold rule
@@ -248,7 +260,6 @@ async function renderImage(lines, isQuip = false) {
     { width: 1080, height: 1350 }
   );
 
-  // Convert to buffer — no temp file needed, Blob takes the buffer directly
   const arrayBuffer = await imageResponse.arrayBuffer();
   return Buffer.from(arrayBuffer);
 }
@@ -256,8 +267,6 @@ async function renderImage(lines, isQuip = false) {
 // ─── VERCEL BLOB UPLOAD ───────────────────────────────────────────────────────
 
 async function uploadToBlob(buffer, fileName) {
-  // Auth is automatic on Vercel via OIDC (BLOB_STORE_ID is set in env).
-  // The store is public, so blob.url is a publicly accessible image URL.
   const blob = await put(fileName, buffer, {
     access: "public",
     contentType: "image/png",
@@ -306,13 +315,13 @@ async function runAgent() {
 
   const now = new Date();
   const day = now.getUTCDay();
+  const CALENDAR = getCalendar();
   const config = CALENDAR[day];
   const isQuip = day === 6;
+  const isPlatformNews = day === 0 || day === 3;
 
   console.log(`[AGENT] Day ${day}: ${config.theme}`);
 
-  // Generate content using a forced tool call so the output is ALWAYS valid
-  // structured data — no hand-written JSON to break on quotes or line breaks.
   const POST_TOOL = {
     name: "create_post",
     description: "Return the finished social media post content.",
@@ -337,21 +346,34 @@ async function runAgent() {
     },
   };
 
+  // Platform News days use web search so Claude finds real recent developments.
+  // All other days force create_post directly — no search needed.
+  const tools = isPlatformNews
+    ? [{ type: "web_search_20260209", name: "web_search" }, POST_TOOL]
+    : [POST_TOOL];
+
+  const tool_choice = isPlatformNews
+    ? { type: "auto" }
+    : { type: "tool", name: "create_post" };
+
   const response = await anthropic.messages.create({
-    model: "claude-sonnet-4-5",
+    model: "claude-sonnet-4-6",
     max_tokens: 2000,
-    tools: [POST_TOOL],
-    tool_choice: { type: "tool", name: "create_post" },
+    tools,
+    tool_choice,
     messages: [{ role: "user", content: config.prompt + IMAGE_TEXT_RULE }],
   });
 
-  // The tool input is already a parsed, valid object — no JSON.parse needed.
-  const toolUse = response.content.find((b) => b.type === "tool_use");
+  // On Platform News days Claude runs web search first, then calls create_post.
+  // On all other days the only tool_use block is create_post.
+  const toolUse = response.content.find(
+    (b) => b.type === "tool_use" && b.name === "create_post"
+  );
   if (!toolUse) throw new Error("No structured output returned from the model.");
   const content = toolUse.input;
   console.log(`[AGENT] Hook: ${content.hook}`);
 
-  // Render image (returns a Buffer)
+  // Render image
   console.log("[AGENT] Rendering image...");
   const imgBuffer = await renderImage(content.lines, isQuip);
 
