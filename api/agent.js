@@ -1,6 +1,10 @@
-// ─── ILLUMINE ADS SOCIAL MEDIA AGENT v4 ──────────────────────────────────────
+// ─── ILLUMINE ADS SOCIAL MEDIA AGENT v5 ──────────────────────────────────────
 // 90-day topic rotation system. No topic repeats for 13 weeks per content type.
 // TOPIC_STATE tab in Google Sheet tracks indexes across runs.
+// Trend-check layer: each non-news day does a quick web search to find what's
+// being discussed about the scheduled topic RIGHT NOW, then colours the post
+// with those signals. Topic bank controls what runs. Web search controls how
+// current it sounds.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import Anthropic from "@anthropic-ai/sdk";
@@ -572,7 +576,96 @@ const POST_TOOL = {
   },
 };
 
+// ─── TREND SEARCH QUERIES PER THEME ──────────────────────────────────────────
+// Targeted search strings that find current conversations about each theme.
+// Used to fetch what practitioners are actually discussing this week.
+
+const TREND_SEARCH_QUERIES = {
+  "Neuromarketing": [
+    "neuromarketing D2C ads 2026",
+    "consumer behaviour paid media trends this week",
+    "psychology advertising D2C brands marketingbrew.com OR socialmediaexaminer.com",
+  ],
+  "Consumer Psychology": [
+    "consumer psychology ecommerce 2026",
+    "buyer behaviour D2C brands trends",
+    "D2C conversion psychology marketingbrew.com OR searchengineland.com",
+  ],
+  "Funnel Optimisation": [
+    "Meta ads funnel optimisation 2026",
+    "D2C conversion rate trends this week",
+    "paid media funnel strategy searchengineland.com OR marketingbrew.com",
+  ],
+  "AI in Marketing": [
+    "AI marketing tools D2C 2026",
+    "artificial intelligence paid ads latest",
+    "AI advertising automation marketingbrew.com OR searchengineland.com",
+  ],
+};
+
+// ─── STEP 1: FETCH TREND SIGNALS ─────────────────────────────────────────────
+
+async function fetchTrendSignals(anthropic, theme, topicObj) {
+  const queries = TREND_SEARCH_QUERIES[theme] || [`${theme} marketing trends 2026`];
+  const today = new Date().toLocaleDateString("en-GB", {
+    weekday: "long", year: "numeric", month: "long", day: "numeric", timeZone: "UTC",
+  });
+
+  const trendPrompt = `Today is ${today}.
+
+I'm about to write a social media post for D2C brand owners on this topic:
+THEME: ${theme}
+TOPIC: ${topicObj.topic}
+BASE ANGLE: ${topicObj.angle}
+
+Search for what practitioners, marketers, and D2C founders are actively discussing about "${topicObj.topic}" right now in 2026. Use these search queries one at a time until you find something useful:
+${queries.map((q, i) => `${i + 1}. "${q}"`).join("\n")}
+
+Return a brief summary (3–5 bullet points) of:
+- Any current debates, controversies, or hot takes about this topic
+- Recent data, studies, or platform changes that relate to it
+- What angle or specific nuance is getting the most traction right now
+
+Be specific. If you find nothing current, say so — don't invent signals.`;
+
+  const trendResponse = await anthropic.messages.create({
+    model: "claude-sonnet-4-6",
+    max_tokens: 600,
+    tools: [{ type: "web_search_20260209", name: "web_search" }],
+    tool_choice: { type: "auto" },
+    messages: [{ role: "user", content: trendPrompt }],
+  });
+
+  // If model used web search, continue to get the summary text
+  if (trendResponse.stop_reason === "tool_use") {
+    const continueResponse = await anthropic.messages.create({
+      model: "claude-sonnet-4-6",
+      max_tokens: 600,
+      tools: [{ type: "web_search_20260209", name: "web_search" }],
+      tool_choice: { type: "auto" },
+      messages: [
+        { role: "user", content: trendPrompt },
+        { role: "assistant", content: trendResponse.content },
+      ],
+    });
+    // Extract text summary from final response
+    const textBlock = continueResponse.content.find((b) => b.type === "text");
+    return textBlock?.text || "No trend signals found — use base angle only.";
+  }
+
+  const textBlock = trendResponse.content.find((b) => b.type === "text");
+  return textBlock?.text || "No trend signals found — use base angle only.";
+}
+
+// ─── STEP 2: GENERATE POST WITH TREND CONTEXT ────────────────────────────────
+
 async function generateTopicPost(anthropic, theme, topicObj) {
+  // Step 1: fetch what's trending about this topic right now
+  console.log(`[AGENT] Fetching trend signals for: ${topicObj.topic}`);
+  const trendSignals = await fetchTrendSignals(anthropic, theme, topicObj);
+  console.log(`[AGENT] Trend signals received (${trendSignals.length} chars)`);
+
+  // Step 2: generate the post, informed by those trend signals
   const systemPrompt = `You are the content strategist for Illumine Ads — a psychology-informed Meta ads consultancy for D2C founders in beauty, supplements, and fashion (UK and Dubai markets).
 
 VOICE: Sharp, authoritative, second person. Specific mechanisms and numbers where possible. No fluff, no motivational filler, no vague claims.
@@ -580,14 +673,19 @@ VOICE: Sharp, authoritative, second person. Specific mechanisms and numbers wher
 AUDIENCE: D2C founders, brand owners, and marketing leads running or planning paid media. They are sophisticated and allergic to generic content.
 
 POST FORMAT:
-- Image card: 2 lines, max 7 words each. These should be provocative, specific, and make the reader feel something immediately.
-- Caption: 150–250 words. Open with a hook (no greeting). State the mechanism. Give 3 specific, actionable insights. Close with a contrarian or unexpected angle. End with 3–4 relevant hashtags.`;
+- Image card: 2 lines, max 7 words each. Provocative, specific, make the reader feel something immediately.
+- Caption: 150–250 words. Open with a hook (no greeting). State the mechanism. Give 3 specific, actionable insights. Close with a contrarian or unexpected angle. End with 3–4 relevant hashtags.
+
+IMPORTANT: You have been given current trend signals about what practitioners are discussing right now. Weave in the most relevant current angle or data point if it strengthens the post. Do not force it if it's irrelevant.`;
 
   const userPrompt = `Today's theme: ${theme}
 Topic: ${topicObj.topic}
-Angle to explore: ${topicObj.angle}
+Base angle: ${topicObj.angle}
 
-Write a post on this specific topic and angle. Be precise. Use real numbers or research references where appropriate. Do not drift to other topics.`;
+CURRENT TREND SIGNALS (what's being discussed about this topic right now):
+${trendSignals}
+
+Write a post on this topic. Use the base angle as your foundation. If the trend signals contain a sharper, more current angle or a specific data point that strengthens the post, use it. Be precise. Do not drift to other topics.`;
 
   const response = await anthropic.messages.create({
     model: "claude-sonnet-4-6",
@@ -685,7 +783,7 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  console.log("[AGENT] Starting Illumine Ads agent v4 — 90-day rotation...");
+  console.log("[AGENT] Starting Illumine Ads agent v5 — 90-day rotation + trend layer...");
 
   const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
   const auth = getAuth(["https://www.googleapis.com/auth/spreadsheets"]);
