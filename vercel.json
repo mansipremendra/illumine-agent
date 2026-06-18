@@ -1,10 +1,10 @@
 {
   "version": 2,
   "functions": {
-    "api/agent.js": { "maxDuration": 60 },
+    "api/illumine-agent.js": { "maxDuration": 60 },
     "api/commenter.js": { "maxDuration": 60 }
   },
   "crons": [
-    { "path": "/api/agent", "schedule": "0 8 * * *" }
+    { "path": "/api/illumine-agent", "schedule": "0 8 * * *" }
   ]
 }
