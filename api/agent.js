@@ -577,95 +577,30 @@ const POST_TOOL = {
 };
 
 // ─── TREND SEARCH QUERIES PER THEME ──────────────────────────────────────────
-// Targeted search strings that find current conversations about each theme.
-// Used to fetch what practitioners are actually discussing this week.
+// Single search query per theme (was 3 — multi-query was driving repeated
+// tool-use loops and blowing past the 60s Hobby plan function timeout).
 
 const TREND_SEARCH_QUERIES = {
-  "Neuromarketing": [
-    "neuromarketing D2C ads 2026",
-    "consumer behaviour paid media trends this week",
-    "psychology advertising D2C brands marketingbrew.com OR socialmediaexaminer.com",
-  ],
-  "Consumer Psychology": [
-    "consumer psychology ecommerce 2026",
-    "buyer behaviour D2C brands trends",
-    "D2C conversion psychology marketingbrew.com OR searchengineland.com",
-  ],
-  "Funnel Optimisation": [
-    "Meta ads funnel optimisation 2026",
-    "D2C conversion rate trends this week",
-    "paid media funnel strategy searchengineland.com OR marketingbrew.com",
-  ],
-  "AI in Marketing": [
-    "AI marketing tools D2C 2026",
-    "artificial intelligence paid ads latest",
-    "AI advertising automation marketingbrew.com OR searchengineland.com",
-  ],
+  "Neuromarketing": "neuromarketing D2C ads trends",
+  "Consumer Psychology": "consumer psychology ecommerce trends",
+  "Funnel Optimisation": "Meta ads funnel optimisation trends",
+  "AI in Marketing": "AI marketing tools D2C latest",
 };
 
-// ─── STEP 1: FETCH TREND SIGNALS ─────────────────────────────────────────────
+// ─── SINGLE-CALL: TREND SEARCH + POST GENERATION TOGETHER ────────────────────
+// Old version: 2-3 sequential Anthropic calls (trend search loop, then a
+// separate post-generation call) — regularly exceeded the 60s Hobby plan
+// function timeout. New version: ONE call. The model gets a single, capped
+// web_search tool (max_uses: 1) and the create_post tool together, and is
+// instructed to search once if useful, then immediately call create_post.
+// This removes the extra network round-trip entirely.
 
-async function fetchTrendSignals(anthropic, theme, topicObj) {
-  const queries = TREND_SEARCH_QUERIES[theme] || [`${theme} marketing trends 2026`];
+async function generateTopicPost(anthropic, theme, topicObj) {
   const today = new Date().toLocaleDateString("en-GB", {
     weekday: "long", year: "numeric", month: "long", day: "numeric", timeZone: "UTC",
   });
+  const searchQuery = TREND_SEARCH_QUERIES[theme] || `${theme} marketing trends`;
 
-  const trendPrompt = `Today is ${today}.
-
-I'm about to write a social media post for D2C brand owners on this topic:
-THEME: ${theme}
-TOPIC: ${topicObj.topic}
-BASE ANGLE: ${topicObj.angle}
-
-Search for what practitioners, marketers, and D2C founders are actively discussing about "${topicObj.topic}" right now in 2026. Use these search queries one at a time until you find something useful:
-${queries.map((q, i) => `${i + 1}. "${q}"`).join("\n")}
-
-Return a brief summary (3–5 bullet points) of:
-- Any current debates, controversies, or hot takes about this topic
-- Recent data, studies, or platform changes that relate to it
-- What angle or specific nuance is getting the most traction right now
-
-Be specific. If you find nothing current, say so — don't invent signals.`;
-
-  const trendResponse = await anthropic.messages.create({
-    model: "claude-sonnet-4-6",
-    max_tokens: 600,
-    tools: [{ type: "web_search_20260209", name: "web_search" }],
-    tool_choice: { type: "auto" },
-    messages: [{ role: "user", content: trendPrompt }],
-  });
-
-  // If model used web search, continue to get the summary text
-  if (trendResponse.stop_reason === "tool_use") {
-    const continueResponse = await anthropic.messages.create({
-      model: "claude-sonnet-4-6",
-      max_tokens: 600,
-      tools: [{ type: "web_search_20260209", name: "web_search" }],
-      tool_choice: { type: "auto" },
-      messages: [
-        { role: "user", content: trendPrompt },
-        { role: "assistant", content: trendResponse.content },
-      ],
-    });
-    // Extract text summary from final response
-    const textBlock = continueResponse.content.find((b) => b.type === "text");
-    return textBlock?.text || "No trend signals found — use base angle only.";
-  }
-
-  const textBlock = trendResponse.content.find((b) => b.type === "text");
-  return textBlock?.text || "No trend signals found — use base angle only.";
-}
-
-// ─── STEP 2: GENERATE POST WITH TREND CONTEXT ────────────────────────────────
-
-async function generateTopicPost(anthropic, theme, topicObj) {
-  // Step 1: fetch what's trending about this topic right now
-  console.log(`[AGENT] Fetching trend signals for: ${topicObj.topic}`);
-  const trendSignals = await fetchTrendSignals(anthropic, theme, topicObj);
-  console.log(`[AGENT] Trend signals received (${trendSignals.length} chars)`);
-
-  // Step 2: generate the post, informed by those trend signals
   const systemPrompt = `You are the content strategist for Illumine Ads — a psychology-informed Meta ads consultancy for D2C founders in beauty, supplements, and fashion (UK and Dubai markets).
 
 VOICE: Sharp, authoritative, second person. Specific mechanisms and numbers where possible. No fluff, no motivational filler, no vague claims.
@@ -676,29 +611,55 @@ POST FORMAT:
 - Image card: 2 lines, max 7 words each. Provocative, specific, make the reader feel something immediately.
 - Caption: 150–250 words. Open with a hook (no greeting). State the mechanism. Give 3 specific, actionable insights. Close with a contrarian or unexpected angle. End with 3–4 relevant hashtags.
 
-IMPORTANT: You have been given current trend signals about what practitioners are discussing right now. Weave in the most relevant current angle or data point if it strengthens the post. Do not force it if it's irrelevant.`;
+WORKFLOW: You have ONE web search available. Use it at most once to check what's currently being discussed about today's topic, then immediately call create_post. Do not search more than once. If the search returns nothing useful, proceed with the base angle alone — do not search again.`;
 
-  const userPrompt = `Today's theme: ${theme}
+  const userPrompt = `Today is ${today}.
+Theme: ${theme}
 Topic: ${topicObj.topic}
 Base angle: ${topicObj.angle}
 
-CURRENT TREND SIGNALS (what's being discussed about this topic right now):
-${trendSignals}
-
-Write a post on this topic. Use the base angle as your foundation. If the trend signals contain a sharper, more current angle or a specific data point that strengthens the post, use it. Be precise. Do not drift to other topics.`;
+Optionally search once for: "${searchQuery}" to see if there's a sharper current angle or data point. Then write the post using create_post. Use the base angle as your foundation regardless of search results. Be precise. Do not drift to other topics.`;
 
   const response = await anthropic.messages.create({
     model: "claude-sonnet-4-6",
-    max_tokens: 1000,
+    max_tokens: 1200,
     system: systemPrompt,
-    tools: [POST_TOOL],
-    tool_choice: { type: "tool", name: "create_post" },
+    tools: [
+      { type: "web_search_20260209", name: "web_search", max_uses: 1 },
+      POST_TOOL,
+    ],
+    tool_choice: { type: "auto" },
     messages: [{ role: "user", content: userPrompt }],
   });
 
-  const toolBlock = response.content.find((b) => b.type === "tool_use" && b.name === "create_post");
-  if (!toolBlock) throw new Error("No create_post tool call in response");
-  return toolBlock.input;
+  // If the model searched first, it gets exactly one more turn to call create_post.
+  // No open-ended loop — capped at a single continuation, same as before but
+  // now guaranteed to be at most 2 calls total instead of up to 3.
+  let finalContent = response.content;
+  if (response.stop_reason === "tool_use") {
+    const toolBlock = response.content.find((b) => b.type === "tool_use");
+    if (toolBlock && toolBlock.name === "web_search") {
+      const continueResponse = await anthropic.messages.create({
+        model: "claude-sonnet-4-6",
+        max_tokens: 1200,
+        system: systemPrompt,
+        tools: [
+          { type: "web_search_20260209", name: "web_search", max_uses: 1 },
+          POST_TOOL,
+        ],
+        tool_choice: { type: "tool", name: "create_post" },
+        messages: [
+          { role: "user", content: userPrompt },
+          { role: "assistant", content: response.content },
+        ],
+      });
+      finalContent = continueResponse.content;
+    }
+  }
+
+  const finalToolBlock = finalContent.find((b) => b.type === "tool_use" && b.name === "create_post");
+  if (!finalToolBlock) throw new Error("No create_post tool call in response");
+  return finalToolBlock.input;
 }
 
 async function generatePlatformNewsPost(anthropic) {
@@ -729,7 +690,7 @@ Search for a real Meta Ads or Google Ads platform update, policy change, or new 
     max_tokens: 1000,
     system: systemPrompt,
     tools: [
-      { type: "web_search_20260209", name: "web_search" },
+      { type: "web_search_20260209", name: "web_search", max_uses: 1 },
       POST_TOOL,
     ],
     tool_choice: { type: "auto" },
@@ -749,7 +710,7 @@ Search for a real Meta Ads or Google Ads platform update, policy change, or new 
         max_tokens: 1000,
         system: systemPrompt,
         tools: [
-          { type: "web_search_20260209", name: "web_search" },
+          { type: "web_search_20260209", name: "web_search", max_uses: 1 },
           POST_TOOL,
         ],
         tool_choice: { type: "tool", name: "create_post" },
