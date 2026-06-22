@@ -611,7 +611,12 @@ POST FORMAT:
 - Image card: 2 lines, max 7 words each. Provocative, specific, make the reader feel something immediately.
 - Caption: 150–250 words. Open with a hook (no greeting). State the mechanism. Give 3 specific, actionable insights. Close with a contrarian or unexpected angle. End with 3–4 relevant hashtags.
 
-WORKFLOW: You have ONE web search available. Use it at most once to check what's currently being discussed about today's topic, then immediately call create_post. Do not search more than once. If the search returns nothing useful, proceed with the base angle alone — do not search again.`;
+FORMATTING RULES (strictly enforced):
+- NO asterisks (*) anywhere. Not for bold, not for bullets, not for emphasis.
+- NO em dashes (—) anywhere. Use a full stop or a new line instead.
+- NO markdown of any kind. Plain sentences and line breaks only.
+
+WORKFLOW: You have ONE web search available. Use it at most once to check what's currently being discussed about today's topic, then immediately call create_post. Do not search more than once. If the search returns nothing useful, proceed with the base angle alone. Do not search again.`;
 
   const userPrompt = `Today is ${today}.
 Theme: ${theme}
@@ -678,6 +683,11 @@ YOUR JOB TODAY: Search for a real, specific Meta or Google platform development 
 POST FORMAT:
 - Image card: 2 lines, max 7 words each. Reference the real platform change.
 - Caption: 150–250 words. Real update named explicitly. 3 actions. Contrarian close. 3–4 hashtags.
+
+FORMATTING RULES (strictly enforced):
+- NO asterisks (*) anywhere. Not for bold, not for bullets, not for emphasis.
+- NO em dashes (—) anywhere. Use a full stop or a new line instead.
+- NO markdown of any kind. Plain sentences and line breaks only.
 
 DO NOT invent platform updates. If you cannot find a real recent one, search again with different terms.`;
 
