@@ -422,7 +422,7 @@ YOUR JOB:
    Point 1: name the principle and state the mechanism in plain terms
    Point 2: the real brand example if found, explained concretely. If none found, a second mechanism detail instead
    Point 3, 4, 5: three specific, distinct tactics a D2C brand can use this week
-3. Call create_carousel_post immediately after searching. Do not search more than once.
+3. Immediately after your search completes, call create_carousel_post in the SAME turn. Do not wait for a follow-up message. Do not search more than once.
 
 CAROUSEL FORMAT:
 Title: the principle name, framed as a hook, max 10 words
@@ -438,8 +438,11 @@ Principle: ${topicObj.topic}
 Angle: ${topicObj.angle}
 
 Search for: "brands using ${topicObj.topic} marketing example"
-Then write the full carousel using create_carousel_post.`;
+Then, in this same turn, write the full carousel using create_carousel_post.`;
 
+  // Web search is a server-executed tool: Anthropic runs it and returns the
+  // final response, including our custom tool call, in ONE round trip.
+  // No manual continuation call needed for the normal case.
   const response = await anthropic.messages.create({
     model: "claude-sonnet-4-6", max_tokens: 1800, system: systemPrompt,
     tools: [{ type: "web_search_20260209", name: "web_search", max_uses: 1 }, CAROUSEL_TOOL],
@@ -447,20 +450,21 @@ Then write the full carousel using create_carousel_post.`;
     messages: [{ role: "user", content: userPrompt }],
   });
 
-  let finalContent = response.content;
-  if (response.stop_reason === "tool_use") {
-    const wb = response.content.find((b) => b.type === "tool_use" && b.name === "web_search");
-    if (wb) {
-      const cont = await anthropic.messages.create({
-        model: "claude-sonnet-4-6", max_tokens: 1800, system: systemPrompt,
-        tools: [{ type: "web_search_20260209", name: "web_search", max_uses: 1 }, CAROUSEL_TOOL],
-        tool_choice: { type: "tool", name: "create_carousel_post" },
-        messages: [{ role: "user", content: userPrompt }, { role: "assistant", content: response.content }],
-      });
-      finalContent = cont.content;
-    }
+  let tb = response.content.find((b) => b.type === "tool_use" && b.name === "create_carousel_post");
+
+  // Rare fallback: if the model stopped after search without producing the
+  // carousel tool call, force it once with a follow-up. This should be
+  // uncommon, not the default path.
+  if (!tb) {
+    const cont = await anthropic.messages.create({
+      model: "claude-sonnet-4-6", max_tokens: 1800, system: systemPrompt,
+      tools: [{ type: "web_search_20260209", name: "web_search", max_uses: 1 }, CAROUSEL_TOOL],
+      tool_choice: { type: "tool", name: "create_carousel_post" },
+      messages: [{ role: "user", content: userPrompt }, { role: "assistant", content: response.content }],
+    });
+    tb = cont.content.find((b) => b.type === "tool_use" && b.name === "create_carousel_post");
   }
-  const tb = finalContent.find((b) => b.type === "tool_use" && b.name === "create_carousel_post");
+
   if (!tb) throw new Error("No create_carousel_post call");
   return tb.input;
 }
@@ -556,10 +560,12 @@ NO asterisks anywhere. NO em dashes anywhere. NO markdown. Plain sentences only.
 
 DO NOT invent updates. If nothing in 7 days, extend to 14 days.`;
 
-  const userPrompt = `Today is ${today}. Search official sources for the biggest paid media update from the last 7 days. Then write the full carousel using create_carousel_post.
+  const userPrompt = `Today is ${today}. Search official sources for the biggest paid media update from the last 7 days. Then, in this same turn, write the full carousel using create_carousel_post.
 
 In the hook field, write: "STORY: [platform] - [one sentence describing what happened]" so Thursday's post can avoid repeating this story.`;
 
+  // Web search executes server-side within one API call. No manual
+  // continuation needed for the normal case.
   const response = await anthropic.messages.create({
     model: "claude-sonnet-4-6", max_tokens: 1800, system: systemPrompt,
     tools: [{ type: "web_search_20260209", name: "web_search", max_uses: 1 }, CAROUSEL_TOOL],
@@ -567,20 +573,18 @@ In the hook field, write: "STORY: [platform] - [one sentence describing what hap
     messages: [{ role: "user", content: userPrompt }],
   });
 
-  let finalContent = response.content;
-  if (response.stop_reason === "tool_use") {
-    const wb = response.content.find((b) => b.type === "tool_use" && b.name === "web_search");
-    if (wb) {
-      const cont = await anthropic.messages.create({
-        model: "claude-sonnet-4-6", max_tokens: 1800, system: systemPrompt,
-        tools: [{ type: "web_search_20260209", name: "web_search", max_uses: 1 }, CAROUSEL_TOOL],
-        tool_choice: { type: "tool", name: "create_carousel_post" },
-        messages: [{ role: "user", content: userPrompt }, { role: "assistant", content: response.content }],
-      });
-      finalContent = cont.content;
-    }
+  let tb = response.content.find((b) => b.type === "tool_use" && b.name === "create_carousel_post");
+
+  // Rare fallback only, not the default path.
+  if (!tb) {
+    const cont = await anthropic.messages.create({
+      model: "claude-sonnet-4-6", max_tokens: 1800, system: systemPrompt,
+      tools: [{ type: "web_search_20260209", name: "web_search", max_uses: 1 }, CAROUSEL_TOOL],
+      tool_choice: { type: "tool", name: "create_carousel_post" },
+      messages: [{ role: "user", content: userPrompt }, { role: "assistant", content: response.content }],
+    });
+    tb = cont.content.find((b) => b.type === "tool_use" && b.name === "create_carousel_post");
   }
-  const tb = finalContent.find((b) => b.type === "tool_use" && b.name === "create_carousel_post");
   if (!tb) throw new Error("No create_carousel_post call for Monday news");
 
   const storyId = tb.input.hook?.startsWith("STORY:") ? tb.input.hook : `STORY: Platform update week of ${today}`;
@@ -614,8 +618,10 @@ Caption: 150 to 250 words, 3 to 4 hashtags
 FORMATTING RULES:
 NO asterisks anywhere. NO em dashes anywhere. NO markdown. Plain sentences only.`;
 
-  const userPrompt = `Today is ${today}. ${mondayContext}. Search for a different update or write a deep dive from a new angle. Then write the full carousel using create_carousel_post.`;
+  const userPrompt = `Today is ${today}. ${mondayContext}. Search for a different update or write a deep dive from a new angle. Then, in this same turn, write the full carousel using create_carousel_post.`;
 
+  // Single call: web search executes server-side, final tool call returns
+  // in the same response for the normal case.
   const response = await anthropic.messages.create({
     model: "claude-sonnet-4-6", max_tokens: 1800, system: systemPrompt,
     tools: [{ type: "web_search_20260209", name: "web_search", max_uses: 1 }, CAROUSEL_TOOL],
@@ -623,20 +629,18 @@ NO asterisks anywhere. NO em dashes anywhere. NO markdown. Plain sentences only.
     messages: [{ role: "user", content: userPrompt }],
   });
 
-  let finalContent = response.content;
-  if (response.stop_reason === "tool_use") {
-    const wb = response.content.find((b) => b.type === "tool_use" && b.name === "web_search");
-    if (wb) {
-      const cont = await anthropic.messages.create({
-        model: "claude-sonnet-4-6", max_tokens: 1800, system: systemPrompt,
-        tools: [{ type: "web_search_20260209", name: "web_search", max_uses: 1 }, CAROUSEL_TOOL],
-        tool_choice: { type: "tool", name: "create_carousel_post" },
-        messages: [{ role: "user", content: userPrompt }, { role: "assistant", content: response.content }],
-      });
-      finalContent = cont.content;
-    }
+  let tb = response.content.find((b) => b.type === "tool_use" && b.name === "create_carousel_post");
+
+  // Rare fallback only, not the default path.
+  if (!tb) {
+    const cont = await anthropic.messages.create({
+      model: "claude-sonnet-4-6", max_tokens: 1800, system: systemPrompt,
+      tools: [{ type: "web_search_20260209", name: "web_search", max_uses: 1 }, CAROUSEL_TOOL],
+      tool_choice: { type: "tool", name: "create_carousel_post" },
+      messages: [{ role: "user", content: userPrompt }, { role: "assistant", content: response.content }],
+    });
+    tb = cont.content.find((b) => b.type === "tool_use" && b.name === "create_carousel_post");
   }
-  const tb = finalContent.find((b) => b.type === "tool_use" && b.name === "create_carousel_post");
   if (!tb) throw new Error("No create_carousel_post call for Thursday news");
   return tb.input;
 }
