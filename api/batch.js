@@ -22,8 +22,6 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import Anthropic from "@anthropic-ai/sdk";
-import { ImageResponse } from "@vercel/og";
-import { put } from "@vercel/blob";
 import { google } from "googleapis";
 
 const NEUROMARKETING_TOPICS = [
@@ -273,106 +271,6 @@ function shuffleArray(arr) {
   return a;
 }
 
-// ─── CAROUSEL SLIDE RENDERER ──────────────────────────────────────────────────
-// Three slide types: title, point, cta. Consistent brand system throughout:
-// charcoal #1A1A1A, gold #C9A84C, white background, Inter font, gold rules.
-
-async function renderTitleSlide(title) {
-  const imageResponse = new ImageResponse(
-    {
-      type: "div",
-      props: {
-        style: { width: "1080px", height: "1350px", background: "#FFFFFF", display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "flex-start", padding: "100px", fontFamily: "Inter", position: "relative" },
-        children: [
-          { type: "div", props: { style: { position: "absolute", top: "80px", left: "100px", right: "100px", height: "3px", background: "#C9A84C" } } },
-          { type: "div", props: { style: { position: "absolute", top: "40px", left: "100px", fontSize: "22px", fontWeight: "900", color: "#1A1A1A", letterSpacing: "4px", textTransform: "uppercase" }, children: "Illumine Ads" } },
-          { type: "div", props: { style: { fontSize: "76px", fontWeight: "900", color: "#1A1A1A", lineHeight: "1.15", maxWidth: "880px" }, children: title } },
-          { type: "div", props: { style: { position: "absolute", bottom: "120px", left: "100px", fontSize: "28px", fontWeight: "700", color: "#C9A84C" }, children: "Swipe for the breakdown" } },
-          { type: "div", props: { style: { position: "absolute", bottom: "80px", left: "100px", right: "100px", height: "3px", background: "#C9A84C" } } },
-          { type: "div", props: { style: { position: "absolute", bottom: "40px", right: "100px", fontSize: "22px", fontWeight: "900", color: "#C9A84C", letterSpacing: "2px" }, children: "1 / 7" } },
-        ],
-      },
-    },
-    { width: 1080, height: 1350 }
-  );
-  return Buffer.from(await imageResponse.arrayBuffer());
-}
-
-async function renderPointSlide(number, subheading, summary) {
-  const slideLabel = String(number + 1).padStart(2, "0");
-  const imageResponse = new ImageResponse(
-    {
-      type: "div",
-      props: {
-        style: { width: "1080px", height: "1350px", background: "#FFFFFF", display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "flex-start", padding: "100px", fontFamily: "Inter", position: "relative" },
-        children: [
-          { type: "div", props: { style: { position: "absolute", top: "80px", left: "100px", right: "100px", height: "3px", background: "#C9A84C" } } },
-          { type: "div", props: { style: { position: "absolute", top: "40px", left: "100px", fontSize: "22px", fontWeight: "900", color: "#1A1A1A", letterSpacing: "4px", textTransform: "uppercase" }, children: "Illumine Ads" } },
-          { type: "div", props: { style: { fontSize: "120px", fontWeight: "900", color: "#C9A84C", lineHeight: "1", marginBottom: "30px" }, children: slideLabel } },
-          { type: "div", props: { style: { fontSize: "56px", fontWeight: "900", color: "#1A1A1A", lineHeight: "1.15", maxWidth: "880px", marginBottom: "30px" }, children: subheading } },
-          { type: "div", props: { style: { fontSize: "32px", fontWeight: "500", color: "#1A1A1A", lineHeight: "1.4", maxWidth: "820px" }, children: summary } },
-          { type: "div", props: { style: { position: "absolute", bottom: "80px", left: "100px", right: "100px", height: "3px", background: "#C9A84C" } } },
-          { type: "div", props: { style: { position: "absolute", bottom: "40px", right: "100px", fontSize: "22px", fontWeight: "900", color: "#C9A84C", letterSpacing: "2px" }, children: `${number + 2} / 7` } },
-        ],
-      },
-    },
-    { width: 1080, height: 1350 }
-  );
-  return Buffer.from(await imageResponse.arrayBuffer());
-}
-
-async function renderCTASlide(cta) {
-  const imageResponse = new ImageResponse(
-    {
-      type: "div",
-      props: {
-        style: { width: "1080px", height: "1350px", background: "#1A1A1A", display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "flex-start", padding: "100px", fontFamily: "Inter", position: "relative" },
-        children: [
-          { type: "div", props: { style: { position: "absolute", top: "80px", left: "100px", right: "100px", height: "3px", background: "#C9A84C" } } },
-          { type: "div", props: { style: { position: "absolute", top: "40px", left: "100px", fontSize: "22px", fontWeight: "900", color: "#C9A84C", letterSpacing: "4px", textTransform: "uppercase" }, children: "Illumine Ads" } },
-          { type: "div", props: { style: { fontSize: "68px", fontWeight: "900", color: "#FFFFFF", lineHeight: "1.2", maxWidth: "880px", marginBottom: "40px" }, children: cta } },
-          { type: "div", props: { style: { fontSize: "36px", fontWeight: "700", color: "#C9A84C" }, children: "@illumineads" } },
-          { type: "div", props: { style: { position: "absolute", bottom: "80px", left: "100px", right: "100px", height: "3px", background: "#C9A84C" } } },
-          { type: "div", props: { style: { position: "absolute", bottom: "40px", right: "100px", fontSize: "22px", fontWeight: "900", color: "#C9A84C", letterSpacing: "2px" }, children: "7 / 7" } },
-        ],
-      },
-    },
-    { width: 1080, height: 1350 }
-  );
-  return Buffer.from(await imageResponse.arrayBuffer());
-}
-
-async function uploadToBlob(buffer, fileName) {
-  const blob = await put(fileName, buffer, { access: "public", contentType: "image/png", addRandomSuffix: true });
-  return blob.url;
-}
-
-// Renders and uploads all 7 slides for a carousel post. Returns array of 7 URLs.
-async function renderAndUploadCarousel(carousel, dateStr) {
-  // All 7 slides render and upload in parallel instead of sequentially.
-  // This is the single biggest latency saving against the 60s Hobby timeout.
-  const timestamp = Date.now();
-
-  const slideJobs = [
-    (async () => {
-      const buffer = await renderTitleSlide(carousel.title);
-      return uploadToBlob(buffer, `illumine-${dateStr}-1-${timestamp}.png`);
-    })(),
-    ...carousel.points.map((point, i) =>
-      (async () => {
-        const buffer = await renderPointSlide(i, point.subheading, point.summary);
-        return uploadToBlob(buffer, `illumine-${dateStr}-${i + 2}-${timestamp}.png`);
-      })()
-    ),
-    (async () => {
-      const buffer = await renderCTASlide(carousel.cta);
-      return uploadToBlob(buffer, `illumine-${dateStr}-7-${timestamp}.png`);
-    })(),
-  ];
-
-  return Promise.all(slideJobs);
-}
-
 // ─── CAROUSEL POST TOOL ───────────────────────────────────────────────────────
 
 const CAROUSEL_TOOL = {
@@ -469,14 +367,14 @@ async function getExistingDates(sheetsClient) {
 }
 
 async function ensureContentLogHeaders(sheetsClient) {
-  const headers = ["Date", "Time", "Theme", "Topic", "Hook", "Caption", "Image_URL_1", "Image_URL_2", "Image_URL_3", "Image_URL_4", "Image_URL_5", "Image_URL_6", "Image_URL_7", "Status", "Notes", "scheduled_date"];
+  const headers = ["Date", "Time", "Theme", "Topic", "Hook", "Caption", "Image_URL_1", "Image_URL_2", "Image_URL_3", "Image_URL_4", "Image_URL_5", "Image_URL_6", "Image_URL_7", "Status", "Notes", "scheduled_date", "raw_json"];
   try {
-    const res = await sheetsClient.spreadsheets.values.get({ spreadsheetId: process.env.GOOGLE_SHEET_ID, range: "CONTENT_LOG!A1:P1" });
+    const res = await sheetsClient.spreadsheets.values.get({ spreadsheetId: process.env.GOOGLE_SHEET_ID, range: "CONTENT_LOG!A1:Q1" });
     const existing = res.data.values?.[0];
-    if (!existing || existing.length < headers.length || existing[6] !== "Image_URL_1") {
+    if (!existing || existing.length < headers.length || existing[6] !== "Image_URL_1" || existing[16] !== "raw_json") {
       await sheetsClient.spreadsheets.values.update({
         spreadsheetId: process.env.GOOGLE_SHEET_ID,
-        range: "CONTENT_LOG!A1:P1",
+        range: "CONTENT_LOG!A1:Q1",
         valueInputOption: "USER_ENTERED",
         requestBody: { values: [headers] },
       });
@@ -486,19 +384,27 @@ async function ensureContentLogHeaders(sheetsClient) {
   }
 }
 
-async function logToSheet(sheetsClient, scheduledDate, theme, topic, hook, caption, imageUrls) {
-  await sheetsClient.spreadsheets.values.append({
+// Writes the TEXT phase only. Image columns stay empty, Status is PENDING_IMAGES,
+// and the full carousel structure (points, cta) is stashed in raw_json so the
+// image-rendering call can pick it back up. Returns the row number written.
+async function logTextPhase(sheetsClient, scheduledDate, theme, topic, hook, caption, carousel) {
+  const rawJson = JSON.stringify({ title: carousel.title, points: carousel.points, cta: carousel.cta });
+  const response = await sheetsClient.spreadsheets.values.append({
     spreadsheetId: process.env.GOOGLE_SHEET_ID,
-    range: "CONTENT_LOG!A:P",
+    range: "CONTENT_LOG!A:Q",
     valueInputOption: "USER_ENTERED",
     requestBody: {
       values: [[
         scheduledDate, "21:00:00", theme, topic, hook, caption,
-        imageUrls[0], imageUrls[1], imageUrls[2], imageUrls[3], imageUrls[4], imageUrls[5], imageUrls[6],
-        "READY", "Weekly carousel batch", scheduledDate,
+        "", "", "", "", "", "", "",
+        "PENDING_IMAGES", "Weekly carousel batch (awaiting images)", scheduledDate, rawJson,
       ]],
     },
   });
+  const updatedRange = response.data.updates?.updatedRange || "";
+  const match = updatedRange.match(/(\d+)(?::|$)/);
+  const rowNumber = match ? parseInt(match[1]) : null;
+  return rowNumber;
 }
 
 // ─── CONTENT GENERATORS (all produce 5-point carousel structure) ─────────────
@@ -737,18 +643,20 @@ NO asterisks anywhere. NO em dashes anywhere. NO markdown. Plain sentences only.
 
 // ─── SELF-CHAINING: fires the next generation call without waiting for it ────
 // Ensures the whole week cascades automatically from a single cron trigger.
+// Generalized to hit any endpoint path, since the chain now alternates
+// between /api/batch (content) and /api/render-images (image rendering).
 
-async function triggerNextGeneration(req) {
+async function triggerChain(req, path) {
   try {
     const host = req.headers.host || process.env.VERCEL_URL;
     const protocol = host?.includes("localhost") ? "http" : "https";
-    const selfUrl = `${protocol}://${host}/api/batch`;
-    const chainPromise = fetch(selfUrl).catch((err) => console.error("[CHAIN] Self-trigger failed:", err.message));
+    const selfUrl = `${protocol}://${host}${path}`;
+    const chainPromise = fetch(selfUrl).catch((err) => console.error(`[CHAIN] Trigger to ${path} failed:`, err.message));
     // Wait briefly to ensure the request is dispatched before this invocation ends.
     await Promise.race([chainPromise, new Promise((resolve) => setTimeout(resolve, 800))]);
-    console.log("[CHAIN] Next generation triggered.");
+    console.log(`[CHAIN] Triggered ${path}`);
   } catch (err) {
-    console.error("[CHAIN] Could not trigger next generation:", err.message);
+    console.error(`[CHAIN] Could not trigger ${path}:`, err.message);
   }
 }
 
@@ -846,30 +754,28 @@ export default async function handler(req, res) {
 
     await saveTopicState(sheetsClient, newState);
 
-    const imageUrls = await renderAndUploadCarousel(carousel, dateStr);
-    await logToSheet(sheetsClient, dateStr, theme, topicName, carousel.hook || carousel.title, carousel.caption, imageUrls);
+    const rowNumber = await logTextPhase(sheetsClient, dateStr, theme, topicName, carousel.hook || carousel.title, carousel.caption, carousel);
+
+    console.log(`[BATCH] Text phase done for ${dateStr}. Row ${rowNumber}. Handing off to render-images.`);
+
+    // Hand off image rendering to a separate invocation so this call's work
+    // stays light (content generation only) and comfortably fits in 60s.
+    await triggerChain(req, `/api/render-images?row=${rowNumber}`);
 
     const postsRemaining = remaining - 1;
-    console.log(`[BATCH] Done. ${generated + 1}/7. ${postsRemaining} remaining.`);
-
-    // Self-chain: if more posts remain this week, trigger the next one automatically.
-    if (postsRemaining > 0) {
-      await triggerNextGeneration(req);
-    }
 
     return res.status(200).json({
       success: true,
-      complete: postsRemaining === 0,
+      complete: false,
+      phase: "text_generated",
       date: dateStr,
       theme,
       topic: topicName,
       title: carousel.title,
-      image_urls: imageUrls,
+      row: rowNumber,
       progress: { generated: generated + 1, remaining: postsRemaining, total: 7 },
       week: { from: weekDates[0].dateStr, to: weekDates[6].dateStr },
-      message: postsRemaining === 0
-        ? `All 7 carousels for ${weekDates[0].dateStr} to ${weekDates[6].dateStr} generated automatically.`
-        : `${generated + 1} of 7 done. Next post triggered automatically.`,
+      message: `Text for ${dateStr} generated. Image rendering triggered for row ${rowNumber}.`,
     });
 
   } catch (err) {
