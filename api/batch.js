@@ -349,21 +349,28 @@ async function uploadToBlob(buffer, fileName) {
 
 // Renders and uploads all 7 slides for a carousel post. Returns array of 7 URLs.
 async function renderAndUploadCarousel(carousel, dateStr) {
-  const urls = [];
+  // All 7 slides render and upload in parallel instead of sequentially.
+  // This is the single biggest latency saving against the 60s Hobby timeout.
+  const timestamp = Date.now();
 
-  const titleBuffer = await renderTitleSlide(carousel.title);
-  urls.push(await uploadToBlob(titleBuffer, `illumine-${dateStr}-1-${Date.now()}.png`));
+  const slideJobs = [
+    (async () => {
+      const buffer = await renderTitleSlide(carousel.title);
+      return uploadToBlob(buffer, `illumine-${dateStr}-1-${timestamp}.png`);
+    })(),
+    ...carousel.points.map((point, i) =>
+      (async () => {
+        const buffer = await renderPointSlide(i, point.subheading, point.summary);
+        return uploadToBlob(buffer, `illumine-${dateStr}-${i + 2}-${timestamp}.png`);
+      })()
+    ),
+    (async () => {
+      const buffer = await renderCTASlide(carousel.cta);
+      return uploadToBlob(buffer, `illumine-${dateStr}-7-${timestamp}.png`);
+    })(),
+  ];
 
-  for (let i = 0; i < 5; i++) {
-    const point = carousel.points[i];
-    const buffer = await renderPointSlide(i, point.subheading, point.summary);
-    urls.push(await uploadToBlob(buffer, `illumine-${dateStr}-${i + 2}-${Date.now()}.png`));
-  }
-
-  const ctaBuffer = await renderCTASlide(carousel.cta);
-  urls.push(await uploadToBlob(ctaBuffer, `illumine-${dateStr}-7-${Date.now()}.png`));
-
-  return urls;
+  return Promise.all(slideJobs);
 }
 
 // ─── CAROUSEL POST TOOL ───────────────────────────────────────────────────────
@@ -738,7 +745,7 @@ async function triggerNextGeneration(req) {
     const selfUrl = `${protocol}://${host}/api/batch`;
     const chainPromise = fetch(selfUrl).catch((err) => console.error("[CHAIN] Self-trigger failed:", err.message));
     // Wait briefly to ensure the request is dispatched before this invocation ends.
-    await Promise.race([chainPromise, new Promise((resolve) => setTimeout(resolve, 2000))]);
+    await Promise.race([chainPromise, new Promise((resolve) => setTimeout(resolve, 800))]);
     console.log("[CHAIN] Next generation triggered.");
   } catch (err) {
     console.error("[CHAIN] Could not trigger next generation:", err.message);
@@ -757,10 +764,13 @@ export default async function handler(req, res) {
   const sheetsClient = google.sheets({ version: "v4", auth });
 
   try {
-    await ensureContentLogHeaders(sheetsClient);
+    // Run independent Sheet reads in parallel instead of sequentially.
+    const [, existingDates] = await Promise.all([
+      ensureContentLogHeaders(sheetsClient),
+      getExistingDates(sheetsClient),
+    ]);
 
     const weekDates = getNextWeekDates();
-    const existingDates = await getExistingDates(sheetsClient);
     const nextDate = weekDates.find((d) => !existingDates.has(d.dateStr));
 
     if (!nextDate) {
