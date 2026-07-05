@@ -407,22 +407,58 @@ async function logTextPhase(sheetsClient, scheduledDate, theme, topic, hook, cap
   return rowNumber;
 }
 
-// ─── CONTENT GENERATORS (all produce 5-point carousel structure) ─────────────
+// ─── LEAN SEARCH PHASE ────────────────────────────────────────────────────────
+// A single, narrow call that does ONLY a web search and returns a short plain
+// text summary. No carousel writing happens here. This isolates the one
+// genuinely slow, unpredictable step (live web search) from everything else,
+// and hard-aborts it after 40 seconds so a slow search cannot silently
+// consume the entire 60 second function budget. On timeout or failure,
+// returns a fallback marker so the pipeline can still proceed with an
+// evergreen angle instead of producing nothing for that week.
 
-async function generatePrincipleCarousel(anthropic, theme, topicObj) {
+async function runLeanSearch(anthropic, searchInstruction) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 40000);
+
+  try {
+    const response = await anthropic.messages.create(
+      {
+        model: "claude-sonnet-4-6",
+        max_tokens: 500,
+        system: "You are a research assistant. Search once for the requested information. Respond with ONLY a short plain text summary, 3 to 5 sentences. Do not write social media content. Do not use markdown. No asterisks. No em dashes.",
+        tools: [{ type: "web_search_20260209", name: "web_search", max_uses: 1 }],
+        tool_choice: { type: "auto" },
+        messages: [{ role: "user", content: searchInstruction }],
+      },
+      { signal: controller.signal }
+    );
+    clearTimeout(timeoutId);
+    const textBlock = response.content.find((b) => b.type === "text");
+    const summary = textBlock?.text?.trim();
+    return { summary: summary || null, timedOut: false };
+  } catch (err) {
+    clearTimeout(timeoutId);
+    console.error("[SEARCH] Lean search failed or timed out:", err.message);
+    return { summary: null, timedOut: true };
+  }
+}
+
+// ─── CONTENT GENERATORS (all produce 5-point carousel structure) ─────────────
+// These now take an OPTIONAL pre-fetched search summary as context instead of
+// searching themselves. No search tool is used in this step, which is why
+// these calls are fast and reliable, matching Funnel/AI/Quip's behaviour.
+
+async function generatePrincipleCarousel(anthropic, theme, topicObj, searchSummary) {
   const systemPrompt = `You are the content strategist for Illumine Ads, a psychology-informed Meta ads consultancy for D2C founders in beauty, supplements, and fashion in UK and Dubai markets.
 
 VOICE: Sharp, authoritative, second person. Specific mechanisms and real numbers. No fluff. No motivational filler.
 
 AUDIENCE: D2C founders and marketing leads running paid media. Sophisticated. Allergic to generic content.
 
-YOUR JOB:
-1. Search once for a real brand example using today's principle. Look for Nike, Apple, Amazon, Zara, Glossier, Oatly, Gymshark, Duolingo, or similar.
-2. Structure the carousel as EXACTLY 5 points:
-   Point 1: name the principle and state the mechanism in plain terms
-   Point 2: the real brand example if found, explained concretely. If none found, a second mechanism detail instead
-   Point 3, 4, 5: three specific, distinct tactics a D2C brand can use this week
-3. Immediately after your search completes, call create_carousel_post in the SAME turn. Do not wait for a follow-up message. Do not search more than once.
+YOUR JOB: Structure the carousel as EXACTLY 5 points:
+Point 1: name the principle and state the mechanism in plain terms
+Point 2: the real brand example if provided below, explained concretely. If none was found, a second mechanism detail instead
+Point 3, 4, 5: three specific, distinct tactics a D2C brand can use this week
 
 CAROUSEL FORMAT:
 Title: the principle name, framed as a hook, max 10 words
@@ -433,38 +469,27 @@ Caption: 150 to 250 words summarising the full carousel, 3 to 4 hashtags
 FORMATTING RULES:
 NO asterisks anywhere. NO em dashes anywhere, use a full stop or new line instead. NO markdown. Plain sentences only.`;
 
+  const researchContext = searchSummary
+    ? `A search was already done for a real brand example. Findings: ${searchSummary}`
+    : "No live search result is available this week. Use your own knowledge of a real brand example if you know one, or lean into mechanism and tactics instead.";
+
   const userPrompt = `Theme: ${theme}
 Principle: ${topicObj.topic}
 Angle: ${topicObj.angle}
 
-Search for: "brands using ${topicObj.topic} marketing example"
-Then, in this same turn, write the full carousel using create_carousel_post.`;
+${researchContext}
 
-  // Web search is a server-executed tool: Anthropic runs it and returns the
-  // final response, including our custom tool call, in ONE round trip.
-  // No manual continuation call needed for the normal case.
+Write the full carousel using create_carousel_post.`;
+
+  // No search tool here at all. This call is fast because it only ever
+  // does one job: write the carousel from the context it is given.
   const response = await anthropic.messages.create({
     model: "claude-sonnet-4-6", max_tokens: 1800, system: systemPrompt,
-    tools: [{ type: "web_search_20260209", name: "web_search", max_uses: 1 }, CAROUSEL_TOOL],
-    tool_choice: { type: "auto" },
+    tools: [CAROUSEL_TOOL], tool_choice: { type: "tool", name: "create_carousel_post" },
     messages: [{ role: "user", content: userPrompt }],
   });
 
-  let tb = response.content.find((b) => b.type === "tool_use" && b.name === "create_carousel_post");
-
-  // Rare fallback: if the model stopped after search without producing the
-  // carousel tool call, force it once with a follow-up. This should be
-  // uncommon, not the default path.
-  if (!tb) {
-    const cont = await anthropic.messages.create({
-      model: "claude-sonnet-4-6", max_tokens: 1800, system: systemPrompt,
-      tools: [{ type: "web_search_20260209", name: "web_search", max_uses: 1 }, CAROUSEL_TOOL],
-      tool_choice: { type: "tool", name: "create_carousel_post" },
-      messages: [{ role: "user", content: userPrompt }, { role: "assistant", content: response.content }],
-    });
-    tb = cont.content.find((b) => b.type === "tool_use" && b.name === "create_carousel_post");
-  }
-
+  const tb = response.content.find((b) => b.type === "tool_use" && b.name === "create_carousel_post");
   if (!tb) throw new Error("No create_carousel_post call");
   return tb.input;
 }
@@ -533,18 +558,14 @@ Expand this into the full 5-point comedic carousel using create_carousel_post.`;
   return tb.input;
 }
 
-async function generateMondayNewsCarousel(anthropic) {
+async function generateMondayNewsCarousel(anthropic, searchSummary) {
   const today = new Date().toLocaleDateString("en-GB", { weekday: "long", year: "numeric", month: "long", day: "numeric", timeZone: "UTC" });
 
   const systemPrompt = `You are the content strategist for Illumine Ads, a psychology-informed Meta ads consultancy for D2C founders in beauty, supplements, and fashion in UK and Dubai markets.
 
 VOICE: Sharp, authoritative, second person. Specific. No fluff.
 
-YOUR JOB: Search official Meta and Google platform sources for the single most significant update from the last 7 days affecting D2C paid media. Policy and fee changes take priority over feature announcements.
-
-${PLATFORM_SOURCES}
-
-Structure the carousel as EXACTLY 5 points:
+YOUR JOB: Write the carousel from the research findings provided below. Structure it as EXACTLY 5 points:
 Point 1: name the update explicitly and what it is
 Point 2: why it matters for D2C brands specifically
 Points 3, 4, 5: three specific actions to take this week in response
@@ -558,40 +579,33 @@ Caption: 150 to 250 words, 3 to 4 hashtags
 FORMATTING RULES:
 NO asterisks anywhere. NO em dashes anywhere. NO markdown. Plain sentences only.
 
-DO NOT invent updates. If nothing in 7 days, extend to 14 days.`;
+DO NOT invent updates beyond what the research findings state.`;
 
-  const userPrompt = `Today is ${today}. Search official sources for the biggest paid media update from the last 7 days. Then, in this same turn, write the full carousel using create_carousel_post.
+  const researchContext = searchSummary
+    ? `Research findings from this week: ${searchSummary}`
+    : "No live search result is available this week. Write about a general, currently relevant Meta or Google paid media mechanic from your own knowledge instead, framed as a practical reminder rather than breaking news.";
 
-In the hook field, write: "STORY: [platform] - [one sentence describing what happened]" so Thursday's post can avoid repeating this story.`;
+  const userPrompt = `Today is ${today}.
 
-  // Web search executes server-side within one API call. No manual
-  // continuation needed for the normal case.
+${researchContext}
+
+Write the full carousel using create_carousel_post. In the hook field, write a short one sentence description of the story or topic covered, prefixed with "STORY:", so Thursday's post can avoid repeating it.`;
+
+  // No search tool here. This call only writes, so it stays fast.
   const response = await anthropic.messages.create({
     model: "claude-sonnet-4-6", max_tokens: 1800, system: systemPrompt,
-    tools: [{ type: "web_search_20260209", name: "web_search", max_uses: 1 }, CAROUSEL_TOOL],
-    tool_choice: { type: "auto" },
+    tools: [CAROUSEL_TOOL], tool_choice: { type: "tool", name: "create_carousel_post" },
     messages: [{ role: "user", content: userPrompt }],
   });
 
-  let tb = response.content.find((b) => b.type === "tool_use" && b.name === "create_carousel_post");
-
-  // Rare fallback only, not the default path.
-  if (!tb) {
-    const cont = await anthropic.messages.create({
-      model: "claude-sonnet-4-6", max_tokens: 1800, system: systemPrompt,
-      tools: [{ type: "web_search_20260209", name: "web_search", max_uses: 1 }, CAROUSEL_TOOL],
-      tool_choice: { type: "tool", name: "create_carousel_post" },
-      messages: [{ role: "user", content: userPrompt }, { role: "assistant", content: response.content }],
-    });
-    tb = cont.content.find((b) => b.type === "tool_use" && b.name === "create_carousel_post");
-  }
+  const tb = response.content.find((b) => b.type === "tool_use" && b.name === "create_carousel_post");
   if (!tb) throw new Error("No create_carousel_post call for Monday news");
 
   const storyId = tb.input.hook?.startsWith("STORY:") ? tb.input.hook : `STORY: Platform update week of ${today}`;
   return { carousel: { ...tb.input, hook: tb.input.title }, storyId };
 }
 
-async function generateThursdayNewsCarousel(anthropic, mondayStory) {
+async function generateThursdayNewsCarousel(anthropic, mondayStory, searchSummary) {
   const today = new Date().toLocaleDateString("en-GB", { weekday: "long", year: "numeric", month: "long", day: "numeric", timeZone: "UTC" });
   const mondayContext = mondayStory?.startsWith("STORY:")
     ? `Monday's post this week already covered: ${mondayStory.replace("STORY:", "").trim()}`
@@ -603,11 +617,9 @@ VOICE: Sharp, authoritative, second person. Specific. No fluff.
 
 ${mondayContext}
 
-YOUR JOB: Search official Meta and Google platform sources for a DIFFERENT significant update from this week. If nothing meaningfully different is found, do a deep dive on Monday's story from a new angle, a specific ad format, a specific D2C vertical, or an implication Monday did not cover. Do not restate Monday's angle.
+YOUR JOB: Write the carousel from the research findings provided below. If the findings describe a different story from Monday's, cover that directly. If the findings say nothing meaningfully different was found, do a deep dive on Monday's story instead, from a new angle: a specific ad format, a specific D2C vertical, or an implication Monday did not cover. Do not restate Monday's angle verbatim.
 
-${PLATFORM_SOURCES}
-
-Structure the carousel as EXACTLY 5 points covering the new story or deep dive angle, same as Monday's structure.
+Structure the carousel as EXACTLY 5 points covering the story or deep dive angle, same structure as Monday's.
 
 CAROUSEL FORMAT:
 Title: max 10 words
@@ -618,29 +630,24 @@ Caption: 150 to 250 words, 3 to 4 hashtags
 FORMATTING RULES:
 NO asterisks anywhere. NO em dashes anywhere. NO markdown. Plain sentences only.`;
 
-  const userPrompt = `Today is ${today}. ${mondayContext}. Search for a different update or write a deep dive from a new angle. Then, in this same turn, write the full carousel using create_carousel_post.`;
+  const researchContext = searchSummary
+    ? `Research findings from this week: ${searchSummary}`
+    : "No live search result is available this week. Do a deep dive on Monday's story from a new angle instead.";
 
-  // Single call: web search executes server-side, final tool call returns
-  // in the same response for the normal case.
+  const userPrompt = `Today is ${today}. ${mondayContext}
+
+${researchContext}
+
+Write the full carousel using create_carousel_post.`;
+
+  // No search tool here. This call only writes, so it stays fast.
   const response = await anthropic.messages.create({
     model: "claude-sonnet-4-6", max_tokens: 1800, system: systemPrompt,
-    tools: [{ type: "web_search_20260209", name: "web_search", max_uses: 1 }, CAROUSEL_TOOL],
-    tool_choice: { type: "auto" },
+    tools: [CAROUSEL_TOOL], tool_choice: { type: "tool", name: "create_carousel_post" },
     messages: [{ role: "user", content: userPrompt }],
   });
 
-  let tb = response.content.find((b) => b.type === "tool_use" && b.name === "create_carousel_post");
-
-  // Rare fallback only, not the default path.
-  if (!tb) {
-    const cont = await anthropic.messages.create({
-      model: "claude-sonnet-4-6", max_tokens: 1800, system: systemPrompt,
-      tools: [{ type: "web_search_20260209", name: "web_search", max_uses: 1 }, CAROUSEL_TOOL],
-      tool_choice: { type: "tool", name: "create_carousel_post" },
-      messages: [{ role: "user", content: userPrompt }, { role: "assistant", content: response.content }],
-    });
-    tb = cont.content.find((b) => b.type === "tool_use" && b.name === "create_carousel_post");
-  }
+  const tb = response.content.find((b) => b.type === "tool_use" && b.name === "create_carousel_post");
   if (!tb) throw new Error("No create_carousel_post call for Thursday news");
   return tb.input;
 }
@@ -709,20 +716,33 @@ export default async function handler(req, res) {
     let topicName;
 
     if (theme === "Platform News Monday") {
-      const result = await generateMondayNewsCarousel(anthropic);
+      const { summary, timedOut } = await runLeanSearch(
+        anthropic,
+        `Search official Meta and Google platform sources for the single most significant D2C paid media update from the last 7 days (extend to 14 if needed). ${PLATFORM_SOURCES} Summarise what you found in 3 to 5 sentences, naming the platform and the specific update explicitly. If genuinely nothing relevant is found, say so plainly.`
+      );
+      if (timedOut) console.log("[BATCH] Monday search timed out or failed, proceeding with fallback context.");
+      const result = await generateMondayNewsCarousel(anthropic, summary);
       carousel = result.carousel;
       topicName = "Platform News";
       newState.monday_story = result.storyId;
 
     } else if (theme === "Platform News Thursday") {
-      carousel = await generateThursdayNewsCarousel(anthropic, state.monday_story);
+      const mondayNote = state.monday_story?.startsWith("STORY:") ? state.monday_story.replace("STORY:", "").trim() : "nothing recorded";
+      const { summary, timedOut } = await runLeanSearch(
+        anthropic,
+        `Monday's post already covered: ${mondayNote}. Search official Meta and Google platform sources for a DIFFERENT significant D2C paid media update from this week. ${PLATFORM_SOURCES} Summarise what you found in 3 to 5 sentences. If nothing meaningfully different is found, say so plainly so a deep dive on Monday's story can be written instead.`
+      );
+      if (timedOut) console.log("[BATCH] Thursday search timed out or failed, proceeding with fallback context.");
+      carousel = await generateThursdayNewsCarousel(anthropic, state.monday_story, summary);
       topicName = "Platform News (deep dive)";
 
     } else if (theme === "Neuromarketing") {
       if (newState.neuro_used.length === 0) newState.neuro_used = shuffleArray(NEUROMARKETING_TOPICS);
       const idx = newState.neuro_used[0];
       const topicObj = NEUROMARKETING_TOPICS[idx];
-      carousel = await generatePrincipleCarousel(anthropic, theme, topicObj);
+      const { summary, timedOut } = await runLeanSearch(anthropic, `Search for: brands using ${topicObj.topic} marketing example. Summarise any real brand example found, naming the brand, in 3 to 5 sentences. If none found, say so plainly.`);
+      if (timedOut) console.log(`[BATCH] Search timed out for ${topicObj.topic}, proceeding with fallback context.`);
+      carousel = await generatePrincipleCarousel(anthropic, theme, topicObj, summary);
       topicName = topicObj.topic;
       newState.neuro_used = newState.neuro_used.slice(1);
 
@@ -730,7 +750,9 @@ export default async function handler(req, res) {
       if (newState.psych_used.length === 0) newState.psych_used = shuffleArray(CONSUMER_PSYCHOLOGY_TOPICS);
       const idx = newState.psych_used[0];
       const topicObj = CONSUMER_PSYCHOLOGY_TOPICS[idx];
-      carousel = await generatePrincipleCarousel(anthropic, theme, topicObj);
+      const { summary, timedOut } = await runLeanSearch(anthropic, `Search for: brands using ${topicObj.topic} marketing example. Summarise any real brand example found, naming the brand, in 3 to 5 sentences. If none found, say so plainly.`);
+      if (timedOut) console.log(`[BATCH] Search timed out for ${topicObj.topic}, proceeding with fallback context.`);
+      carousel = await generatePrincipleCarousel(anthropic, theme, topicObj, summary);
       topicName = topicObj.topic;
       newState.psych_used = newState.psych_used.slice(1);
 
