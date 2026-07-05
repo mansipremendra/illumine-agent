@@ -433,19 +433,44 @@ async function logTextPhase(sheetsClient, scheduledDate, theme, topic, hook, cap
 // should be both faster and more predictable than the pattern we fought with
 // before. Still wrapped in a race-based time guard as a safety net.
 
+// ─── RETRY WITH BACKOFF ───────────────────────────────────────────────────────
+// Gemini's free tier occasionally returns 503 (model overloaded) under load.
+// This is Google's infrastructure being busy, not our code. Retry a few times
+// with a short backoff before giving up, so transient overload self-heals
+// instead of requiring a manual re-test every time.
+
+async function callWithRetry(fn, maxAttempts = 3) {
+  let lastError;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastError = err;
+      const is503 = err.message?.includes("503") || err.message?.includes("UNAVAILABLE") || err.message?.includes("overloaded");
+      if (!is503 || attempt === maxAttempts) throw err;
+      const waitMs = attempt * 3000;
+      console.log(`[RETRY] Attempt ${attempt} hit overload, waiting ${waitMs}ms before retry ${attempt + 1}/${maxAttempts}`);
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
+    }
+  }
+  throw lastError;
+}
+
 async function runLeanSearch(ai, searchInstruction) {
   const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve({ timedOut: true }), 40000));
 
   const searchPromise = (async () => {
     try {
-      const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash",
-        contents: searchInstruction,
-        config: {
-          tools: [{ googleSearch: {} }],
-          systemInstruction: "You are a research assistant. Search once for the requested information. Respond with ONLY a short plain text summary, 3 to 5 sentences. Do not write social media content. Do not use markdown. No asterisks. No em dashes.",
-        },
-      });
+      const response = await callWithRetry(() =>
+        ai.models.generateContent({
+          model: "gemini-2.5-flash-lite",
+          contents: searchInstruction,
+          config: {
+            tools: [{ googleSearch: {} }],
+            systemInstruction: "You are a research assistant. Search once for the requested information. Respond with ONLY a short plain text summary, 3 to 5 sentences. Do not write social media content. Do not use markdown. No asterisks. No em dashes.",
+          },
+        })
+      );
       const summary = response.text?.trim();
       return { summary: summary || null, timedOut: false };
     } catch (err) {
@@ -489,20 +514,22 @@ const CAROUSEL_FUNCTION = {
 // Forces Gemini to call create_carousel_post and returns the parsed args.
 // No search tool is present in this call, which is why it stays fast.
 async function callCarouselFunction(ai, systemPrompt, userPrompt) {
-  const response = await ai.models.generateContent({
-    model: "gemini-2.5-flash-lite",
-    contents: userPrompt,
-    config: {
-      systemInstruction: systemPrompt,
-      tools: [{ functionDeclarations: [CAROUSEL_FUNCTION] }],
-      toolConfig: {
-        functionCallingConfig: {
-          mode: "ANY",
-          allowedFunctionNames: ["create_carousel_post"],
+  const response = await callWithRetry(() =>
+    ai.models.generateContent({
+      model: "gemini-2.5-flash-lite",
+      contents: userPrompt,
+      config: {
+        systemInstruction: systemPrompt,
+        tools: [{ functionDeclarations: [CAROUSEL_FUNCTION] }],
+        toolConfig: {
+          functionCallingConfig: {
+            mode: "ANY",
+            allowedFunctionNames: ["create_carousel_post"],
+          },
         },
       },
-    },
-  });
+    })
+  );
 
   const call = response.functionCalls?.[0];
   if (!call || call.name !== "create_carousel_post") {
