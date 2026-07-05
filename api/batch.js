@@ -1,27 +1,39 @@
-// ─── ILLUMINE ADS WEEKLY CAROUSEL BATCH GENERATOR ────────────────────────────
+// ─── ILLUMINE ADS WEEKLY CAROUSEL BATCH GENERATOR (Gemini) ───────────────────
 // Endpoint: /api/batch
 // Fully automatic. A single Saturday cron triggers this once. Each invocation
 // generates ONE 7-slide carousel post, logs it, then fires a self-chaining
 // call to generate the next one, cascading through all 7 posts for the
 // following week without any manual intervention.
 //
-// Every post is now a 7-slide Instagram carousel:
+// Runs on Google Gemini instead of Anthropic Claude. Gemini 2.5 Flash-Lite
+// writes carousels (free tier, no card required). Gemini 2.5 Flash with
+// Google Search grounding handles the search-dependent posts. Search
+// grounding runs as Google's own search infrastructure inside the model
+// call, not an agentic multi-step tool loop, which should be faster and
+// more predictable than the pattern that caused repeated timeouts before.
+//
+// Every post is a 7-slide Instagram carousel:
 //   Slide 1: Title (the hook/principle, punchy)
 //   Slides 2-6: Five points, each with a subheading and a 2-line summary
 //   Slide 7: Follow CTA
 //
-// Content generation produces exactly 5 distinct points per post (up from 3)
-// to fill the carousel format properly.
+// Two-phase pipeline, same as before:
+//   /api/batch does content generation ONLY (search + write), then hands off
+//   /api/render-images does image rendering ONLY, then chains back to /api/batch
 //
-// CONTENT_LOG schema (columns A-P):
+// CONTENT_LOG schema (columns A-Q):
 // Date, Time, Theme, Topic, Hook, Caption, Image_URL_1..Image_URL_7,
-// Status, Notes, scheduled_date
+// Status, Notes, scheduled_date, raw_json
 //
 // TOPIC_STATE schema unchanged: neuro_used, psych_used, funnel_index,
 // ai_index, quip_index, last_updated, monday_story
+//
+// Requires GEMINI_API_KEY environment variable (get one free at
+// aistudio.google.com). GOOGLE_SHEET_ID, GOOGLE_CLIENT_EMAIL, and
+// GOOGLE_PRIVATE_KEY remain unchanged from before.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import Anthropic from "@anthropic-ai/sdk";
+import { GoogleGenAI } from "@google/genai";
 import { google } from "googleapis";
 
 const NEUROMARKETING_TOPICS = [
@@ -251,7 +263,6 @@ SECONDARY (verification only):
 EXCLUDED: LinkedIn posts, agency blogs, YouTube, opinion pieces, recap posts.`;
 
 // ─── GOOGLE AUTH ──────────────────────────────────────────────────────────────
-
 function getAuth(scopes) {
   return new google.auth.JWT({
     email: process.env.GOOGLE_CLIENT_EMAIL,
@@ -416,39 +427,96 @@ async function logTextPhase(sheetsClient, scheduledDate, theme, topic, hook, cap
 // returns a fallback marker so the pipeline can still proceed with an
 // evergreen angle instead of producing nothing for that week.
 
-async function runLeanSearch(anthropic, searchInstruction) {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 40000);
+// ─── LEAN SEARCH PHASE (Gemini Google Search grounding) ──────────────────────
+// Gemini's built-in Google Search grounding is Google's own search infra
+// running inside the model call, not an agentic multi-step tool loop. This
+// should be both faster and more predictable than the pattern we fought with
+// before. Still wrapped in a race-based time guard as a safety net.
 
-  try {
-    const response = await anthropic.messages.create(
-      {
-        model: "claude-sonnet-4-6",
-        max_tokens: 500,
-        system: "You are a research assistant. Search once for the requested information. Respond with ONLY a short plain text summary, 3 to 5 sentences. Do not write social media content. Do not use markdown. No asterisks. No em dashes.",
-        tools: [{ type: "web_search_20260209", name: "web_search", max_uses: 1 }],
-        tool_choice: { type: "auto" },
-        messages: [{ role: "user", content: searchInstruction }],
+async function runLeanSearch(ai, searchInstruction) {
+  const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve({ timedOut: true }), 40000));
+
+  const searchPromise = (async () => {
+    try {
+      const response = await ai.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: searchInstruction,
+        config: {
+          tools: [{ googleSearch: {} }],
+          systemInstruction: "You are a research assistant. Search once for the requested information. Respond with ONLY a short plain text summary, 3 to 5 sentences. Do not write social media content. Do not use markdown. No asterisks. No em dashes.",
+        },
+      });
+      const summary = response.text?.trim();
+      return { summary: summary || null, timedOut: false };
+    } catch (err) {
+      console.error("[SEARCH] Lean search failed:", err.message);
+      return { summary: null, timedOut: false, error: true };
+    }
+  })();
+
+  return Promise.race([searchPromise, timeoutPromise]);
+}
+
+// ─── CAROUSEL FUNCTION DECLARATION (Gemini function calling format) ──────────
+
+const CAROUSEL_FUNCTION = {
+  name: "create_carousel_post",
+  description: "Return the finished 7-slide carousel post.",
+  parameters: {
+    type: "OBJECT",
+    properties: {
+      title: { type: "STRING", description: "Slide 1 headline. Punchy, max 10 words. This is the hook that stops the scroll." },
+      points: {
+        type: "ARRAY",
+        description: "EXACTLY 5 points, each becomes one carousel slide.",
+        items: {
+          type: "OBJECT",
+          properties: {
+            subheading: { type: "STRING", description: "Max 6 words. Bold, specific." },
+            summary: { type: "STRING", description: "18 to 24 words. Fits naturally on 2 lines. Explains the point concretely." },
+          },
+          required: ["subheading", "summary"],
+        },
       },
-      { signal: controller.signal }
-    );
-    clearTimeout(timeoutId);
-    const textBlock = response.content.find((b) => b.type === "text");
-    const summary = textBlock?.text?.trim();
-    return { summary: summary || null, timedOut: false };
-  } catch (err) {
-    clearTimeout(timeoutId);
-    console.error("[SEARCH] Lean search failed or timed out:", err.message);
-    return { summary: null, timedOut: true };
+      cta: { type: "STRING", description: "Slide 7 text. Max 12 words. A follow or engagement call to action." },
+      caption: { type: "STRING", description: "Full caption for the post, 150 to 250 words, including hashtags." },
+      hook: { type: "STRING", description: "Short reference hook, same as title, used for logging." },
+    },
+    required: ["title", "points", "cta", "caption", "hook"],
+  },
+};
+
+// Forces Gemini to call create_carousel_post and returns the parsed args.
+// No search tool is present in this call, which is why it stays fast.
+async function callCarouselFunction(ai, systemPrompt, userPrompt) {
+  const response = await ai.models.generateContent({
+    model: "gemini-2.5-flash-lite",
+    contents: userPrompt,
+    config: {
+      systemInstruction: systemPrompt,
+      tools: [{ functionDeclarations: [CAROUSEL_FUNCTION] }],
+      toolConfig: {
+        functionCallingConfig: {
+          mode: "ANY",
+          allowedFunctionNames: ["create_carousel_post"],
+        },
+      },
+    },
+  });
+
+  const call = response.functionCalls?.[0];
+  if (!call || call.name !== "create_carousel_post") {
+    throw new Error("Gemini did not return a create_carousel_post function call");
   }
+  return call.args;
 }
 
 // ─── CONTENT GENERATORS (all produce 5-point carousel structure) ─────────────
-// These now take an OPTIONAL pre-fetched search summary as context instead of
+// These take an OPTIONAL pre-fetched search summary as context instead of
 // searching themselves. No search tool is used in this step, which is why
-// these calls are fast and reliable, matching Funnel/AI/Quip's behaviour.
+// these calls are fast and reliable.
 
-async function generatePrincipleCarousel(anthropic, theme, topicObj, searchSummary) {
+async function generatePrincipleCarousel(ai, theme, topicObj, searchSummary) {
   const systemPrompt = `You are the content strategist for Illumine Ads, a psychology-informed Meta ads consultancy for D2C founders in beauty, supplements, and fashion in UK and Dubai markets.
 
 VOICE: Sharp, authoritative, second person. Specific mechanisms and real numbers. No fluff. No motivational filler.
@@ -481,20 +549,10 @@ ${researchContext}
 
 Write the full carousel using create_carousel_post.`;
 
-  // No search tool here at all. This call is fast because it only ever
-  // does one job: write the carousel from the context it is given.
-  const response = await anthropic.messages.create({
-    model: "claude-sonnet-4-6", max_tokens: 1800, system: systemPrompt,
-    tools: [CAROUSEL_TOOL], tool_choice: { type: "tool", name: "create_carousel_post" },
-    messages: [{ role: "user", content: userPrompt }],
-  });
-
-  const tb = response.content.find((b) => b.type === "tool_use" && b.name === "create_carousel_post");
-  if (!tb) throw new Error("No create_carousel_post call");
-  return tb.input;
+  return callCarouselFunction(ai, systemPrompt, userPrompt);
 }
 
-async function generateTopicCarousel(anthropic, theme, topicObj) {
+async function generateTopicCarousel(ai, theme, topicObj) {
   const systemPrompt = `You are the content strategist for Illumine Ads, a psychology-informed Meta ads consultancy for D2C founders in beauty, supplements, and fashion in UK and Dubai markets.
 
 VOICE: Sharp, authoritative, second person. Specific mechanisms and numbers. No fluff.
@@ -518,17 +576,10 @@ Angle: ${topicObj.angle}
 
 Write the full carousel using create_carousel_post.`;
 
-  const response = await anthropic.messages.create({
-    model: "claude-sonnet-4-6", max_tokens: 1800, system: systemPrompt,
-    tools: [CAROUSEL_TOOL], tool_choice: { type: "tool", name: "create_carousel_post" },
-    messages: [{ role: "user", content: userPrompt }],
-  });
-  const tb = response.content.find((b) => b.type === "tool_use" && b.name === "create_carousel_post");
-  if (!tb) throw new Error("No create_carousel_post call");
-  return tb.input;
+  return callCarouselFunction(ai, systemPrompt, userPrompt);
 }
 
-async function generateQuipCarousel(anthropic, quipSeed) {
+async function generateQuipCarousel(ai, quipSeed) {
   const systemPrompt = `You are the content strategist for Illumine Ads, a psychology-informed Meta ads consultancy for D2C founders in beauty, supplements, and fashion in UK and Dubai markets.
 
 VOICE: Sharp, funny, relatable. This is the one lighter post of the week. Still specific to paid media, not generic humor.
@@ -548,17 +599,10 @@ NO asterisks anywhere. NO em dashes anywhere, use a full stop or new line instea
 
 Expand this into the full 5-point comedic carousel using create_carousel_post.`;
 
-  const response = await anthropic.messages.create({
-    model: "claude-sonnet-4-6", max_tokens: 1800, system: systemPrompt,
-    tools: [CAROUSEL_TOOL], tool_choice: { type: "tool", name: "create_carousel_post" },
-    messages: [{ role: "user", content: userPrompt }],
-  });
-  const tb = response.content.find((b) => b.type === "tool_use" && b.name === "create_carousel_post");
-  if (!tb) throw new Error("No create_carousel_post call");
-  return tb.input;
+  return callCarouselFunction(ai, systemPrompt, userPrompt);
 }
 
-async function generateMondayNewsCarousel(anthropic, searchSummary) {
+async function generateMondayNewsCarousel(ai, searchSummary) {
   const today = new Date().toLocaleDateString("en-GB", { weekday: "long", year: "numeric", month: "long", day: "numeric", timeZone: "UTC" });
 
   const systemPrompt = `You are the content strategist for Illumine Ads, a psychology-informed Meta ads consultancy for D2C founders in beauty, supplements, and fashion in UK and Dubai markets.
@@ -591,21 +635,12 @@ ${researchContext}
 
 Write the full carousel using create_carousel_post. In the hook field, write a short one sentence description of the story or topic covered, prefixed with "STORY:", so Thursday's post can avoid repeating it.`;
 
-  // No search tool here. This call only writes, so it stays fast.
-  const response = await anthropic.messages.create({
-    model: "claude-sonnet-4-6", max_tokens: 1800, system: systemPrompt,
-    tools: [CAROUSEL_TOOL], tool_choice: { type: "tool", name: "create_carousel_post" },
-    messages: [{ role: "user", content: userPrompt }],
-  });
-
-  const tb = response.content.find((b) => b.type === "tool_use" && b.name === "create_carousel_post");
-  if (!tb) throw new Error("No create_carousel_post call for Monday news");
-
-  const storyId = tb.input.hook?.startsWith("STORY:") ? tb.input.hook : `STORY: Platform update week of ${today}`;
-  return { carousel: { ...tb.input, hook: tb.input.title }, storyId };
+  const args = await callCarouselFunction(ai, systemPrompt, userPrompt);
+  const storyId = args.hook?.startsWith("STORY:") ? args.hook : `STORY: Platform update week of ${today}`;
+  return { carousel: { ...args, hook: args.title }, storyId };
 }
 
-async function generateThursdayNewsCarousel(anthropic, mondayStory, searchSummary) {
+async function generateThursdayNewsCarousel(ai, mondayStory, searchSummary) {
   const today = new Date().toLocaleDateString("en-GB", { weekday: "long", year: "numeric", month: "long", day: "numeric", timeZone: "UTC" });
   const mondayContext = mondayStory?.startsWith("STORY:")
     ? `Monday's post this week already covered: ${mondayStory.replace("STORY:", "").trim()}`
@@ -640,22 +675,8 @@ ${researchContext}
 
 Write the full carousel using create_carousel_post.`;
 
-  // No search tool here. This call only writes, so it stays fast.
-  const response = await anthropic.messages.create({
-    model: "claude-sonnet-4-6", max_tokens: 1800, system: systemPrompt,
-    tools: [CAROUSEL_TOOL], tool_choice: { type: "tool", name: "create_carousel_post" },
-    messages: [{ role: "user", content: userPrompt }],
-  });
-
-  const tb = response.content.find((b) => b.type === "tool_use" && b.name === "create_carousel_post");
-  if (!tb) throw new Error("No create_carousel_post call for Thursday news");
-  return tb.input;
+  return callCarouselFunction(ai, systemPrompt, userPrompt);
 }
-
-// ─── SELF-CHAINING: fires the next generation call without waiting for it ────
-// Ensures the whole week cascades automatically from a single cron trigger.
-// Generalized to hit any endpoint path, since the chain now alternates
-// between /api/batch (content) and /api/render-images (image rendering).
 
 async function triggerChain(req, path) {
   try {
@@ -678,7 +699,7 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
   const auth = getAuth(["https://www.googleapis.com/auth/spreadsheets"]);
   const sheetsClient = google.sheets({ version: "v4", auth });
 
@@ -717,11 +738,11 @@ export default async function handler(req, res) {
 
     if (theme === "Platform News Monday") {
       const { summary, timedOut } = await runLeanSearch(
-        anthropic,
+        ai,
         `Search official Meta and Google platform sources for the single most significant D2C paid media update from the last 7 days (extend to 14 if needed). ${PLATFORM_SOURCES} Summarise what you found in 3 to 5 sentences, naming the platform and the specific update explicitly. If genuinely nothing relevant is found, say so plainly.`
       );
       if (timedOut) console.log("[BATCH] Monday search timed out or failed, proceeding with fallback context.");
-      const result = await generateMondayNewsCarousel(anthropic, summary);
+      const result = await generateMondayNewsCarousel(ai, summary);
       carousel = result.carousel;
       topicName = "Platform News";
       newState.monday_story = result.storyId;
@@ -729,20 +750,20 @@ export default async function handler(req, res) {
     } else if (theme === "Platform News Thursday") {
       const mondayNote = state.monday_story?.startsWith("STORY:") ? state.monday_story.replace("STORY:", "").trim() : "nothing recorded";
       const { summary, timedOut } = await runLeanSearch(
-        anthropic,
+        ai,
         `Monday's post already covered: ${mondayNote}. Search official Meta and Google platform sources for a DIFFERENT significant D2C paid media update from this week. ${PLATFORM_SOURCES} Summarise what you found in 3 to 5 sentences. If nothing meaningfully different is found, say so plainly so a deep dive on Monday's story can be written instead.`
       );
       if (timedOut) console.log("[BATCH] Thursday search timed out or failed, proceeding with fallback context.");
-      carousel = await generateThursdayNewsCarousel(anthropic, state.monday_story, summary);
+      carousel = await generateThursdayNewsCarousel(ai, state.monday_story, summary);
       topicName = "Platform News (deep dive)";
 
     } else if (theme === "Neuromarketing") {
       if (newState.neuro_used.length === 0) newState.neuro_used = shuffleArray(NEUROMARKETING_TOPICS);
       const idx = newState.neuro_used[0];
       const topicObj = NEUROMARKETING_TOPICS[idx];
-      const { summary, timedOut } = await runLeanSearch(anthropic, `Search for: brands using ${topicObj.topic} marketing example. Summarise any real brand example found, naming the brand, in 3 to 5 sentences. If none found, say so plainly.`);
+      const { summary, timedOut } = await runLeanSearch(ai, `Search for: brands using ${topicObj.topic} marketing example. Summarise any real brand example found, naming the brand, in 3 to 5 sentences. If none found, say so plainly.`);
       if (timedOut) console.log(`[BATCH] Search timed out for ${topicObj.topic}, proceeding with fallback context.`);
-      carousel = await generatePrincipleCarousel(anthropic, theme, topicObj, summary);
+      carousel = await generatePrincipleCarousel(ai, theme, topicObj, summary);
       topicName = topicObj.topic;
       newState.neuro_used = newState.neuro_used.slice(1);
 
@@ -750,30 +771,30 @@ export default async function handler(req, res) {
       if (newState.psych_used.length === 0) newState.psych_used = shuffleArray(CONSUMER_PSYCHOLOGY_TOPICS);
       const idx = newState.psych_used[0];
       const topicObj = CONSUMER_PSYCHOLOGY_TOPICS[idx];
-      const { summary, timedOut } = await runLeanSearch(anthropic, `Search for: brands using ${topicObj.topic} marketing example. Summarise any real brand example found, naming the brand, in 3 to 5 sentences. If none found, say so plainly.`);
+      const { summary, timedOut } = await runLeanSearch(ai, `Search for: brands using ${topicObj.topic} marketing example. Summarise any real brand example found, naming the brand, in 3 to 5 sentences. If none found, say so plainly.`);
       if (timedOut) console.log(`[BATCH] Search timed out for ${topicObj.topic}, proceeding with fallback context.`);
-      carousel = await generatePrincipleCarousel(anthropic, theme, topicObj, summary);
+      carousel = await generatePrincipleCarousel(ai, theme, topicObj, summary);
       topicName = topicObj.topic;
       newState.psych_used = newState.psych_used.slice(1);
 
     } else if (theme === "Funnel Optimisation") {
       const idx = state.funnel % FUNNEL_OPTIMISATION_TOPICS.length;
       const topicObj = FUNNEL_OPTIMISATION_TOPICS[idx];
-      carousel = await generateTopicCarousel(anthropic, theme, topicObj);
+      carousel = await generateTopicCarousel(ai, theme, topicObj);
       topicName = topicObj.topic;
       newState.funnel = idx + 1;
 
     } else if (theme === "AI in Marketing") {
       const idx = state.ai % AI_MARKETING_TOPICS.length;
       const topicObj = AI_MARKETING_TOPICS[idx];
-      carousel = await generateTopicCarousel(anthropic, theme, topicObj);
+      carousel = await generateTopicCarousel(ai, theme, topicObj);
       topicName = topicObj.topic;
       newState.ai = idx + 1;
 
     } else if (theme === "Quip") {
       const idx = state.quip % QUIP_SEEDS.length;
       const quipSeed = QUIP_SEEDS[idx];
-      carousel = await generateQuipCarousel(anthropic, quipSeed);
+      carousel = await generateQuipCarousel(ai, quipSeed);
       topicName = quipSeed.topic;
       newState.quip = idx + 1;
     }
